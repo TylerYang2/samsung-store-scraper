@@ -39,79 +39,62 @@ def scrape_stores() -> list[dict]:
         )
         page = context.new_page()
 
-        # 모든 JSON/.sesc 응답 캡처
-        ajax_responses = []
-        all_json_urls = []
+        ajax_queue = []
 
         def handle_response(response):
             try:
-                if response.status != 200:
-                    return
-                ct = response.headers.get("content-type", "")
-                url = response.url
-                if "json" in ct or ".sesc" in url:
-                    all_json_urls.append(url.split("samsungstore.com")[-1][:80])
-                    try:
-                        data = response.json()
-                        ajax_responses.append((url, data))
-                    except Exception:
-                        pass
+                if response.status == 200 and "selectMakeListAjax" in response.url:
+                    data = response.json()
+                    ajax_queue.append(data)
             except Exception:
                 pass
 
         page.on("response", handle_response)
         page.goto(SAMSUNG_URL, wait_until="networkidle", timeout=30000)
 
-        # 캡처된 응답 출력
-        print(f"  [NET] JSON/.sesc 응답 {len(all_json_urls)}개:")
-        for u in all_json_urls[:15]:
-            print(f"    {u}")
+        # 초기 AJAX 응답 처리 (페이지 로드 시 자동 호출됨)
+        print(f"  [NET] 초기 AJAX 응답: {len(ajax_queue)}개")
+        if ajax_queue:
+            first = ajax_queue[0]
+            if isinstance(first, dict):
+                print(f"    keys: {list(first.keys())}")
+                for k, v in list(first.items())[:3]:
+                    print(f"    {k}: {str(v)[:200]}")
+            elif isinstance(first, list) and first:
+                print(f"    list[{len(first)}], first item: {first[0]}")
 
-        # 서울/경기 텍스트 요소 찾기
-        for region in ["서울", "경기"]:
+        seen = set()
+        for data in ajax_queue:
+            for item in _extract_items_from_json(data):
+                key = (item.get("name", ""), item.get("address", ""))
+                if key not in seen:
+                    seen.add(key)
+                    stores.append(item)
+        ajax_queue.clear()
+
+        # 시도 선택 UI 클릭하며 추가 데이터 수집
+        sido_elements = page.query_selector_all("li[class*='area_sido'] a")
+        print(f"  [SIDO] {len(sido_elements)}개 지역 발견")
+
+        for el in sido_elements:
             try:
-                loc = page.get_by_text(region, exact=True)
-                if loc.count() > 0:
-                    el = loc.first
-                    tag = el.evaluate("el => el.tagName.toLowerCase()")
-                    cls = el.get_attribute("class") or ""
-                    onclick = el.get_attribute("onclick") or ""
-                    parent_html = el.evaluate("el => el.parentElement?.outerHTML?.slice(0,300)") or ""
-                    print(f"  [REGION] '{region}': <{tag}> class='{cls}' onclick='{onclick[:80]}'")
-                    print(f"    parent: {parent_html[:200]}")
+                text = el.inner_text().strip()
+                ajax_queue.clear()
+                el.click()
+                page.wait_for_timeout(2000)
+
+                new_count = 0
+                for data in ajax_queue:
+                    for item in _extract_items_from_json(data):
+                        key = (item.get("name", ""), item.get("address", ""))
+                        if key not in seen:
+                            seen.add(key)
+                            stores.append(item)
+                            new_count += 1
+
+                print(f"    ✓ '{text}' → 신규 {new_count}개 (AJAX {len(ajax_queue)}개)")
             except Exception as e:
-                print(f"  [REGION] '{region}' 탐색 실패: {e}")
-
-        # onclick에 sido/area 포함 요소
-        try:
-            onclick_els = page.query_selector_all("[onclick*='sido'],[onclick*='Sido'],[onclick*='area'],[onclick*='Area'],[onclick*='shop'],[onclick*='Shop']")
-            print(f"  [ONCLICK] sido/area/shop 요소 {len(onclick_els)}개")
-            for el in onclick_els[:5]:
-                print(f"    {el.evaluate('el => el.outerHTML')[:200]}")
-        except Exception as e:
-            print(f"  [ONCLICK] 탐색 실패: {e}")
-
-        # select 요소 탐색
-        try:
-            for sel_el in page.query_selector_all("select"):
-                name = sel_el.get_attribute("name") or sel_el.get_attribute("id") or ""
-                opts = sel_el.query_selector_all("option")
-                print(f"  [SELECT] name='{name}' {len(opts)}개 옵션")
-                for opt in opts[:5]:
-                    print(f"    value='{opt.get_attribute('value')}' text='{opt.inner_text().strip()}'")
-        except Exception as e:
-            print(f"  [SELECT] 탐색 실패: {e}")
-
-        # body HTML 덤프 (scripts/styles 제거)
-        try:
-            body_html = page.eval_on_selector("body", """el => {
-                let cl = el.cloneNode(true);
-                cl.querySelectorAll('script,style').forEach(e => e.remove());
-                return cl.innerHTML.slice(0, 6000);
-            }""")
-            print(f"  [BODY HTML]:\n{body_html}")
-        except Exception as e:
-            print(f"  [BODY] 실패: {e}")
+                print(f"    [WARN] {e}")
 
         browser.close()
 
