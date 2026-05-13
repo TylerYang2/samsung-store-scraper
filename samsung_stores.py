@@ -129,6 +129,8 @@ def fetch_stores_by_sido(session: requests.Session, endpoint: str, sido: str) ->
                     r = fn(ep, headers=HEADERS, timeout=15, **kwargs)
                     if r.status_code != 200 or not r.text.strip():
                         continue
+                    if sido == "서울" and method == "post":
+                        print(f"    [DEBUG] {ep[-40:]} {data} → {r.text[:200]!r}")
                     # JSON 시도
                     try:
                         result = r.json()
@@ -294,8 +296,10 @@ def update_github_secret(secret_name: str, secret_value: str):
         json={"encrypted_value": encrypted, "key_id": key_data["key_id"]},
         timeout=10,
     )
-    resp.raise_for_status()
-    print(f"  → GitHub secret '{secret_name}' 갱신 완료")
+    if resp.status_code in (201, 204):
+        print(f"  → GitHub secret '{secret_name}' 갱신 완료")
+    else:
+        print(f"  → GitHub secret 갱신 실패 (status {resp.status_code}) — 수동 갱신 필요")
 
 
 # ── 메인 ──────────────────────────────────────────────
