@@ -19,6 +19,7 @@ BOX_FILE_NAME = "Samsung_Stores.xlsx"
 BOX_CLIENT_ID     = os.environ["BOX_CLIENT_ID"]
 BOX_CLIENT_SECRET = os.environ["BOX_CLIENT_SECRET"]
 BOX_REFRESH_TOKEN = os.environ["BOX_REFRESH_TOKEN"]
+BOX_ACCESS_TOKEN  = os.environ.get("BOX_ACCESS_TOKEN", "")
 GH_PAT            = os.environ.get("GH_PAT", "")
 GH_REPO           = os.environ.get("GITHUB_REPOSITORY", "")  # owner/repo
 
@@ -316,9 +317,14 @@ def main():
         df.to_excel(path, index=False)
         print(f"  → Excel 저장: {BOX_FILE_NAME} ({len(df)}행)")
 
-        # 3. Box 토큰 갱신
-        print("Box 토큰 갱신 중...")
-        access_token, new_refresh_token = box_refresh_token(BOX_REFRESH_TOKEN)
+        # 3. Box 토큰 - access_token 직접 사용, 실패시 refresh
+        print("Box 토큰 준비 중...")
+        if BOX_ACCESS_TOKEN:
+            access_token = BOX_ACCESS_TOKEN
+            new_refresh_token = BOX_REFRESH_TOKEN
+            print("  → access_token 직접 사용")
+        else:
+            access_token, new_refresh_token = box_refresh_token(BOX_REFRESH_TOKEN)
 
         # 4. Box 업로드
         print("Box 업로드 중...")

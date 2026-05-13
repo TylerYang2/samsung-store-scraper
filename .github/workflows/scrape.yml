@@ -28,5 +28,6 @@ jobs:
           BOX_CLIENT_ID:     ${{ secrets.BOX_CLIENT_ID }}
           BOX_CLIENT_SECRET: ${{ secrets.BOX_CLIENT_SECRET }}
           BOX_REFRESH_TOKEN: ${{ secrets.BOX_REFRESH_TOKEN }}
+          BOX_ACCESS_TOKEN:  ${{ secrets.BOX_ACCESS_TOKEN }}
           GH_PAT:            ${{ secrets.GH_PAT }}
         run: python samsung_stores.py
