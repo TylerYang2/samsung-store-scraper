@@ -184,20 +184,25 @@ def geocode_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _nominatim_geocode(address: str):
+    import re
     if not address or len(address) < 3:
         return None, None
-    try:
-        resp = requests.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={"q": address, "format": "json", "limit": 1, "countrycodes": "kr"},
-            headers={"User-Agent": "SamsungStoreScraper/1.0 (tyleryang@apple.com)"},
-            timeout=10,
-        )
-        results = resp.json()
-        if results:
-            return float(results[0]["lat"]), float(results[0]["lon"])
-    except Exception as e:
-        print(f"    [geocode WARN] {address[:30]}: {e}")
+    # 괄호 안 건물명 제거 후 시도, 실패 시 원본으로 재시도
+    clean = re.sub(r'\(.*?\)', '', address).strip()
+    for query in ([clean, address] if clean != address else [address]):
+        try:
+            resp = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": query, "format": "json", "limit": 1, "countrycodes": "kr"},
+                headers={"User-Agent": "SamsungStoreScraper/1.0 (tyleryang@apple.com)"},
+                timeout=10,
+            )
+            results = resp.json()
+            if results:
+                return float(results[0]["lat"]), float(results[0]["lon"])
+            _time.sleep(1.1)
+        except Exception as e:
+            print(f"    [geocode WARN] {address[:30]}: {e}")
     return None, None
 
 
