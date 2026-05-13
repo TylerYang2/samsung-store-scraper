@@ -150,44 +150,43 @@ def scrape_stores() -> list[dict]:
 
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    # AJAX 엔드포인트 탐색
-    endpoint = find_ajax_endpoint(soup, session)
-
-    if endpoint:
-        # 파라미터 디버깅
-        find_ajax_params(soup, session, endpoint)
-        # 서울만 먼저 디버그 모드로 시도
-        test = fetch_stores_by_sido(session, endpoint, "서울", debug=True)
-        if not test:
-            print("\n[ERROR] 파라미터를 찾지 못했습니다. 위 DEBUG 출력을 확인하세요.")
-            sys.exit(1)
-
-        all_stores = list(test)
-        for sido in SIDO_LIST[1:]:
-            stores = fetch_stores_by_sido(session, endpoint, sido)
-            print(f"  → {sido}: {len(stores)}개")
-            all_stores.extend(stores)
-        return all_stores
-
-    # HTML에서 직접 파싱 시도 (data-* 속성)
     stores = []
+
+    # 방법 1: store-list 안의 li 항목 파싱
+    store_list = soup.select("ul.store-list li, .store-list li, ul.shop-list li")
+    if store_list:
+        print(f"  → store-list li: {len(store_list)}개 발견")
+        for li in store_list:
+            name = (li.select_one(".store-name, .shop-name, h3, h4, .name, strong") or li).get_text(strip=True)
+            addr = (li.select_one(".address, .addr, .store-addr") or li.find(string=re.compile(r"서울|경기|부산|대구|인천|광주|대전|울산|강원|충|경|전|제주|세종"))).strip() if li.find(string=re.compile(r"서울|경기|부산|대구|인천|광주|대전|울산|강원|충|경|전|제주|세종")) else ""
+            tel = (li.select_one(".tel, .phone, .contact") or {}).get_text(strip=True) if li.select_one(".tel, .phone, .contact") else ""
+            stores.append({"name": name, "address": addr, "tel": tel})
+        return stores
+
+    # 방법 2: JS 변수 내 HTML 문자열 파싱
+    # 방법 3: data-* 속성으로 렌더된 항목
     for el in soup.find_all(attrs={"data-shopnm": True}):
         stores.append({k.replace("data-", ""): v for k, v in el.attrs.items()})
     if stores:
-        print(f"  → HTML data 속성에서 {len(stores)}개 매장 발견")
+        print(f"  → data-shopnm 속성: {len(stores)}개")
         return stores
 
-    # 모두 실패 시 디버그 출력
-    print("\n[ERROR] 매장 데이터를 찾지 못했습니다. 외부 JS 파일 목록:")
-    for tag in soup.find_all("script", src=True):
-        src = tag.get("src", "")
-        if "samsungstore" in src:
-            print(f"  {src}")
-    print("\n인라인 JS (첫 번째 블록 600자):")
-    for script in soup.find_all("script"):
-        if script.string and len(script.string) > 300:
-            print(script.string[:600])
-            break
+    # 방법 4: 텍스트에서 매장명 패턴 (삼성스토어 + 주소)
+    for el in soup.find_all(string=re.compile(r"삼성스토어")):
+        parent = el.parent
+        text = parent.get_text(" ", strip=True)
+        if len(text) > 5:
+            stores.append({"raw": text})
+    if stores:
+        print(f"  → 텍스트 패턴: {len(stores)}개")
+        return stores
+
+    # 모두 실패 시 HTML 구조 출력
+    print("\n[ERROR] 매장 데이터를 찾지 못했습니다.")
+    print("[DEBUG] .store-list 존재 여부:", bool(soup.select(".store-list")))
+    print("[DEBUG] 전체 class 목록 샘플:")
+    for tag in soup.find_all(class_=True)[:30]:
+        print(f"  <{tag.name} class='{' '.join(tag.get('class', []))}'> {tag.get_text(strip=True)[:50]}")
     sys.exit(1)
 
 
