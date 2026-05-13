@@ -77,27 +77,66 @@ def find_ajax_endpoint(soup: BeautifulSoup, session: requests.Session) -> str | 
     return None
 
 
-def fetch_stores_by_sido(session: requests.Session, endpoint: str, sido: str) -> list[dict]:
+def find_ajax_params(soup: BeautifulSoup, session: requests.Session, endpoint: str) -> dict:
+    """JS에서 엔드포인트에 전달되는 파라미터 추출"""
+    endpoint_path = endpoint.split("samsungstore.com")[-1].lstrip("/")
+    all_js = [s.string for s in soup.find_all("script") if s.string]
+    for tag in soup.find_all("script", src=True):
+        src = tag["src"]
+        if "samsungstore.com" in src or src.startswith("/"):
+            url = src if src.startswith("http") else BASE_URL + src
+            try:
+                r = session.get(url, timeout=10)
+                all_js.append(r.text)
+            except Exception:
+                pass
+
+    for js in all_js:
+        idx = js.find(endpoint_path)
+        if idx == -1:
+            idx = js.find("selectMakeListAjax")
+        if idx != -1:
+            ctx = js[max(0, idx-800):idx+400]
+            print(f"\n[DEBUG] 엔드포인트 주변 JS:\n{ctx}\n")
+            # data: { ... } 파턴 추출
+            m = re.search(r'data\s*:\s*\{([^}]+)\}', ctx)
+            if m:
+                print(f"[DEBUG] data 파라미터: {m.group(1)}")
+            break
+    return {}
+
+
+def fetch_stores_by_sido(session: requests.Session, endpoint: str, sido: str, debug: bool = False) -> list[dict]:
     """시도별 매장 목록 AJAX 호출"""
     payloads = [
+        {"sidoCd": sido, "menu": "w401"},
         {"sido": sido, "menu": "w401"},
+        {"areaCd": sido, "menu": "w401"},
         {"sidoNm": sido, "menu": "w401"},
-        {"sido": sido},
-        {"sidoNm": sido},
+        {"sido": sido, "gubun": "sido"},
+        {"searchType": "sido", "searchWord": sido},
     ]
     for data in payloads:
-        try:
-            r = session.post(endpoint, data=data, headers=HEADERS, timeout=15)
-            if r.status_code == 200:
-                try:
-                    result = r.json()
-                    items = result if isinstance(result, list) else result.get("list") or result.get("data") or []
-                    if items:
-                        return [dict(item, sido=sido) for item in items]
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        for method in ["post", "get"]:
+            try:
+                fn = session.post if method == "post" else session.get
+                kwargs = {"data": data} if method == "post" else {"params": data}
+                r = fn(endpoint, headers=HEADERS, timeout=15, **kwargs)
+                if r.status_code == 200 and r.text.strip():
+                    if debug:
+                        print(f"  [DEBUG] {method.upper()} {data} → {r.text[:300]}")
+                    try:
+                        result = r.json()
+                        items = result if isinstance(result, list) else (
+                            result.get("list") or result.get("data") or
+                            result.get("shopList") or result.get("storeList") or []
+                        )
+                        if items:
+                            return [dict(item, sido=sido) for item in items]
+                    except Exception:
+                        pass
+            except Exception:
+                pass
     return []
 
 
@@ -115,13 +154,20 @@ def scrape_stores() -> list[dict]:
     endpoint = find_ajax_endpoint(soup, session)
 
     if endpoint:
-        all_stores = []
-        for sido in SIDO_LIST:
+        # 파라미터 디버깅
+        find_ajax_params(soup, session, endpoint)
+        # 서울만 먼저 디버그 모드로 시도
+        test = fetch_stores_by_sido(session, endpoint, "서울", debug=True)
+        if not test:
+            print("\n[ERROR] 파라미터를 찾지 못했습니다. 위 DEBUG 출력을 확인하세요.")
+            sys.exit(1)
+
+        all_stores = list(test)
+        for sido in SIDO_LIST[1:]:
             stores = fetch_stores_by_sido(session, endpoint, sido)
             print(f"  → {sido}: {len(stores)}개")
             all_stores.extend(stores)
-        if all_stores:
-            return all_stores
+        return all_stores
 
     # HTML에서 직접 파싱 시도 (data-* 속성)
     stores = []
