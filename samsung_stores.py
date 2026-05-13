@@ -1,15 +1,15 @@
 import os
-import re
 import json
 import sys
 import base64
 import tempfile
+import time as _time
 from datetime import datetime
 
 import requests
-from bs4 import BeautifulSoup
 import pandas as pd
 from nacl import encoding, public
+from playwright.sync_api import sync_playwright
 
 # ── 설정 ──────────────────────────────────────────────
 SAMSUNG_URL = "https://www.samsungstore.com/shop/selectFindShopMain.sesc?menu=w401"
@@ -27,187 +27,165 @@ GH_REPO           = os.environ.get("GITHUB_REPOSITORY", "")  # owner/repo
 # ── 1. 스크래핑 ───────────────────────────────────────
 BASE_URL = "https://www.samsungstore.com"
 
-# 한국 시도 코드 (사이트 공통 패턴)
-SIDO_LIST = [
-    "서울", "경기", "인천", "부산", "대구", "대전",
-    "광주", "울산", "강원", "충북", "충남", "경북",
-    "경남", "전북", "전남", "제주", "세종",
-]
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.3.1 Safari/605.1.15"
-    ),
-    "Accept-Language": "ko-KR,ko;q=0.9",
-    "Referer": SAMSUNG_URL,
-    "X-Requested-With": "XMLHttpRequest",
-}
-
-
-def find_ajax_endpoint(soup: BeautifulSoup, session: requests.Session) -> str | None:
-    """인라인/외부 JS에서 매장 목록 AJAX 엔드포인트 탐색"""
-    ajax_patterns = [
-        r'["\']([^"\']*(?:shopList|storeList|findShop|shopSearch)[^"\']*\.sesc)["\']',
-        r'url\s*:\s*["\']([^"\']+\.sesc)["\']',
-        r'ajax\(["\']([^"\']+\.sesc)["\']',
-    ]
-
-    all_js = [s.string for s in soup.find_all("script") if s.string]
-
-    # 외부 JS 파일도 다운로드해서 탐색
-    for tag in soup.find_all("script", src=True):
-        src = tag["src"]
-        if "samsungstore.com" in src or src.startswith("/"):
-            url = src if src.startswith("http") else BASE_URL + src
-            try:
-                r = session.get(url, timeout=10)
-                all_js.append(r.text)
-            except Exception:
-                pass
-
-    for js in all_js:
-        for pat in ajax_patterns:
-            m = re.search(pat, js)
-            if m:
-                path = m.group(1)
-                endpoint = path if path.startswith("http") else BASE_URL + "/" + path.lstrip("/")
-                print(f"  → AJAX 엔드포인트 발견: {endpoint}")
-                return endpoint
-
-    return None
-
-
-def find_ajax_params(soup: BeautifulSoup, session: requests.Session, endpoint: str) -> dict:
-    """JS에서 엔드포인트에 전달되는 파라미터 추출"""
-    endpoint_path = endpoint.split("samsungstore.com")[-1].lstrip("/")
-    all_js = [s.string for s in soup.find_all("script") if s.string]
-    for tag in soup.find_all("script", src=True):
-        src = tag["src"]
-        if "samsungstore.com" in src or src.startswith("/"):
-            url = src if src.startswith("http") else BASE_URL + src
-            try:
-                r = session.get(url, timeout=10)
-                all_js.append(r.text)
-            except Exception:
-                pass
-
-    for js in all_js:
-        idx = js.find(endpoint_path)
-        if idx == -1:
-            idx = js.find("selectMakeListAjax")
-        if idx != -1:
-            ctx = js[max(0, idx-800):idx+400]
-            print(f"\n[DEBUG] 엔드포인트 주변 JS:\n{ctx}\n")
-            # data: { ... } 파턴 추출
-            m = re.search(r'data\s*:\s*\{([^}]+)\}', ctx)
-            if m:
-                print(f"[DEBUG] data 파라미터: {m.group(1)}")
-            break
-    return {}
-
-
-def fetch_stores_by_sido(session: requests.Session, endpoint: str, sido: str) -> list[dict]:
-    """시도별 매장 목록 - JSON 또는 HTML 응답 모두 처리"""
-    # /shop/ 경로 포함 버전도 시도
-    endpoints = [endpoint, endpoint.replace("/selectMakeListAjax", "/shop/selectMakeListAjax")]
-
-    payloads = [
-        {"sidoCd": sido},
-        {"sido": sido},
-        {"areaCd": sido},
-        {"sidoNm": sido},
-        {"sido": sido, "menu": "w401"},
-        {"sidoCd": sido, "menu": "w401", "nearYn": "N"},
-    ]
-
-    for ep in endpoints:
-        for data in payloads:
-            for method in ["post", "get"]:
-                try:
-                    fn = session.post if method == "post" else session.get
-                    kwargs = {"data": data} if method == "post" else {"params": data}
-                    r = fn(ep, headers=HEADERS, timeout=15, **kwargs)
-                    if r.status_code != 200 or not r.text.strip():
-                        continue
-                    if sido == "서울" and method == "post":
-                        print(f"    [DEBUG] {ep[-40:]} {data} → {r.text[:200]!r}")
-                    # JSON 시도
-                    try:
-                        result = r.json()
-                        items = result if isinstance(result, list) else (
-                            result.get("list") or result.get("data") or
-                            result.get("shopList") or result.get("storeList") or []
-                        )
-                        if items:
-                            print(f"    ✓ {ep} {method.upper()} {data} → JSON {len(items)}개")
-                            return [dict(item, sido=sido) for item in items]
-                    except Exception:
-                        pass
-                    # HTML fragment 시도
-                    if "<li" in r.text:
-                        frag = BeautifulSoup(r.text, "html.parser")
-                        items = []
-                        for li in frag.find_all("li"):
-                            text = li.get_text(" ", strip=True)
-                            if text:
-                                items.append({"raw": text, "sido": sido})
-                        if items:
-                            print(f"    ✓ {ep} {method.upper()} {data} → HTML {len(items)}개")
-                            return items
-                except Exception:
-                    pass
-    return []
-
 
 def scrape_stores() -> list[dict]:
-    session = requests.Session()
-
-    print("Samsung Store 페이지 가져오는 중...")
-    resp = session.get(SAMSUNG_URL, headers=HEADERS, timeout=30)
-    resp.raise_for_status()
-    print(f"  → {resp.status_code}, {len(resp.text):,} bytes")
-
-    soup = BeautifulSoup(resp.text, "html.parser")
-
     stores = []
 
-    # 방법 1: store-list 안의 li 항목 파싱
-    store_list = soup.select("ul.store-list li, .store-list li, ul.shop-list li")
-    if store_list:
-        print(f"  → store-list li: {len(store_list)}개 발견")
-        for li in store_list:
-            name = (li.select_one(".store-name, .shop-name, h3, h4, .name, strong") or li).get_text(strip=True)
-            addr = (li.select_one(".address, .addr, .store-addr") or li.find(string=re.compile(r"서울|경기|부산|대구|인천|광주|대전|울산|강원|충|경|전|제주|세종"))).strip() if li.find(string=re.compile(r"서울|경기|부산|대구|인천|광주|대전|울산|강원|충|경|전|제주|세종")) else ""
-            tel = (li.select_one(".tel, .phone, .contact") or {}).get_text(strip=True) if li.select_one(".tel, .phone, .contact") else ""
-            stores.append({"name": name, "address": addr, "tel": tel})
-        return stores
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
 
-    # 방법 2: JS 변수 내 HTML 문자열 파싱
-    # 방법 3: data-* 속성으로 렌더된 항목
-    for el in soup.find_all(attrs={"data-shopnm": True}):
-        stores.append({k.replace("data-", ""): v for k, v in el.attrs.items()})
-    if stores:
-        print(f"  → data-shopnm 속성: {len(stores)}개")
-        return stores
+        # 네트워크 응답 인터셉트
+        ajax_responses = []
 
-    # 방법 4: 텍스트에서 매장명 패턴 (삼성스토어 + 주소)
-    for el in soup.find_all(string=re.compile(r"삼성스토어")):
-        parent = el.parent
-        text = parent.get_text(" ", strip=True)
-        if len(text) > 5:
-            stores.append({"raw": text})
-    if stores:
-        print(f"  → 텍스트 패턴: {len(stores)}개")
-        return stores
+        def handle_response(response):
+            if "selectMakeListAjax" in response.url or "shopList" in response.url or "storeList" in response.url:
+                try:
+                    data = response.json()
+                    ajax_responses.append(data)
+                except Exception:
+                    pass
 
-    # 모두 실패 시 HTML 구조 출력
-    print("\n[ERROR] 매장 데이터를 찾지 못했습니다.")
-    print("[DEBUG] .store-list 존재 여부:", bool(soup.select(".store-list")))
-    print("[DEBUG] 전체 class 목록 샘플:")
-    for tag in soup.find_all(class_=True)[:30]:
-        print(f"  <{tag.name} class='{' '.join(tag.get('class', []))}'> {tag.get_text(strip=True)[:50]}")
-    sys.exit(1)
+        page.on("response", handle_response)
+
+        page.goto(SAMSUNG_URL, wait_until="networkidle", timeout=30000)
+
+        # 시도 선택 UI 찾기 - 여러 셀렉터 시도
+        sido_selectors = [
+            "ul.sido-list li a", "ul.area-list li a", ".sido-wrap li a",
+            "ul.tab-list li a", ".region-list li a", "a[data-sido]",
+            "ul.shop-tab li a", ".sido li", ".area li a",
+        ]
+
+        sido_elements = []
+        for sel in sido_selectors:
+            els = page.query_selector_all(sel)
+            if els:
+                print(f"  → 시도 UI 발견: {sel} ({len(els)}개)")
+                sido_elements = els
+                break
+
+        if sido_elements:
+            # 각 시도 클릭하며 데이터 수집
+            for el in sido_elements:
+                try:
+                    text = el.inner_text().strip()
+                    print(f"  → 클릭: {text}")
+                    ajax_responses.clear()
+                    el.click()
+                    page.wait_for_timeout(2000)
+
+                    # AJAX 응답이 있으면 파싱
+                    for resp_data in ajax_responses:
+                        items = _extract_items_from_json(resp_data)
+                        stores.extend(items)
+
+                    # AJAX 없으면 DOM 파싱
+                    if not ajax_responses:
+                        items = _parse_store_dom(page)
+                        stores.extend(items)
+                except Exception as e:
+                    print(f"    [WARN] {e}")
+        else:
+            # 시도 UI를 못 찾으면 페이지 전체 DOM 파싱 + 디버그 출력
+            print("  [WARN] 시도 UI를 찾지 못함, DOM 덤프:")
+            for tag in page.query_selector_all("[class]")[:20]:
+                cls = tag.get_attribute("class") or ""
+                txt = tag.inner_text()[:40].replace("\n", " ")
+                print(f"    class='{cls}' text='{txt}'")
+
+            # AJAX 응답으로 시도
+            for resp_data in ajax_responses:
+                items = _extract_items_from_json(resp_data)
+                stores.extend(items)
+
+            if not stores:
+                items = _parse_store_dom(page)
+                stores.extend(items)
+
+        browser.close()
+
+    print(f"  → 총 {len(stores)}개 매장 수집")
+    return stores
+
+
+def _extract_items_from_json(data) -> list[dict]:
+    """JSON 응답에서 매장 목록 추출"""
+    items = []
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        for key in ("list", "data", "shopList", "storeList", "result"):
+            if isinstance(data.get(key), list):
+                items = data[key]
+                break
+
+    result = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        store = {
+            "name": item.get("shopNm") or item.get("storeName") or item.get("name") or item.get("shopName") or "",
+            "address": item.get("addr") or item.get("address") or item.get("shopAddr") or "",
+            "tel": item.get("tel") or item.get("phone") or item.get("telNo") or "",
+        }
+        if store["name"]:
+            result.append(store)
+    return result
+
+
+def _parse_store_dom(page) -> list[dict]:
+    """DOM에서 직접 매장 정보 파싱"""
+    stores = []
+    selectors = [
+        "ul.store-list li", ".store-list li", "ul.shop-list li",
+        ".shop-list li", ".store-item", ".shop-item",
+    ]
+    for sel in selectors:
+        els = page.query_selector_all(sel)
+        if els:
+            for el in els:
+                name_el = el.query_selector(".store-name, .shop-name, strong, h3, h4, .name")
+                addr_el = el.query_selector(".address, .addr, .store-addr")
+                tel_el = el.query_selector(".tel, .phone, .contact")
+                name = name_el.inner_text().strip() if name_el else el.inner_text()[:30].strip()
+                addr = addr_el.inner_text().strip() if addr_el else ""
+                tel = tel_el.inner_text().strip() if tel_el else ""
+                if name:
+                    stores.append({"name": name, "address": addr, "tel": tel})
+            break
+    return stores
+
+
+def geocode_df(df: pd.DataFrame) -> pd.DataFrame:
+    """주소 컬럼으로 lat/lng 추가. Nominatim 사용."""
+    lats, lngs = [], []
+    for addr in df.get("address", []):
+        lat, lng = _nominatim_geocode(addr)
+        lats.append(lat)
+        lngs.append(lng)
+        _time.sleep(1.1)  # Nominatim rate limit
+    df["lat"] = lats
+    df["lng"] = lngs
+    return df
+
+
+def _nominatim_geocode(address: str):
+    if not address or len(address) < 3:
+        return None, None
+    try:
+        resp = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": address, "format": "json", "limit": 1, "countrycodes": "kr"},
+            headers={"User-Agent": "SamsungStoreScraper/1.0 (tyleryang@apple.com)"},
+            timeout=10,
+        )
+        results = resp.json()
+        if results:
+            return float(results[0]["lat"]), float(results[0]["lon"])
+    except Exception as e:
+        print(f"    [geocode WARN] {address[:30]}: {e}")
+    return None, None
 
 
 # ── 2. Box 토큰 갱신 + 업로드 ─────────────────────────
@@ -223,7 +201,12 @@ def box_refresh_token(refresh_token: str) -> tuple[str, str]:
         timeout=15,
     )
     print(f"  [Box 토큰] status={resp.status_code} body={resp.text[:300]}")
-    resp.raise_for_status()
+    if not resp.ok:
+        print("\n[ERROR] Box refresh_token 갱신 실패.")
+        print("  원인: refresh_token이 만료되었거나 올바르지 않습니다.")
+        print("  복구 방법: python box_oauth_setup.py 실행 → 출력된 토큰을")
+        print("  BOX_ACCESS_TOKEN / BOX_REFRESH_TOKEN GitHub Secret에 붙여넣기")
+        sys.exit(1)
     data = resp.json()
     return data["access_token"], data["refresh_token"]
 
@@ -309,6 +292,8 @@ def main():
     # 1. 스크래핑
     stores = scrape_stores()
     df = pd.DataFrame(stores)
+    if len(df) > 0:
+        df = geocode_df(df)
     print(f"  → 총 {len(df)}개 매장, 컬럼: {list(df.columns)}")
 
     # 2. Excel 저장
@@ -317,21 +302,34 @@ def main():
         df.to_excel(path, index=False)
         print(f"  → Excel 저장: {BOX_FILE_NAME} ({len(df)}행)")
 
-        # 3. Box 토큰 - access_token 직접 사용, 실패시 refresh
+        # 3. Box 토큰 준비
         print("Box 토큰 준비 중...")
+        refreshed = False
         if BOX_ACCESS_TOKEN:
             access_token = BOX_ACCESS_TOKEN
             new_refresh_token = BOX_REFRESH_TOKEN
             print("  → access_token 직접 사용")
         else:
             access_token, new_refresh_token = box_refresh_token(BOX_REFRESH_TOKEN)
+            refreshed = True
 
-        # 4. Box 업로드
+        # 4. Box 업로드 (access_token 만료 시 자동 refresh 후 재시도)
         print("Box 업로드 중...")
-        box_upload(access_token, BOX_FOLDER_ID, BOX_FILE_NAME, path)
+        try:
+            box_upload(access_token, BOX_FOLDER_ID, BOX_FILE_NAME, path)
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 401:
+                print("  → access_token 만료, refresh 중...")
+                access_token, new_refresh_token = box_refresh_token(BOX_REFRESH_TOKEN)
+                refreshed = True
+                box_upload(access_token, BOX_FOLDER_ID, BOX_FILE_NAME, path)
+            else:
+                raise
 
-    # 5. 새 refresh_token을 GitHub secret에 저장
+    # 5. refresh가 발생한 경우 새 토큰을 GitHub secret에 저장
     print("GitHub secret 갱신 중...")
+    if refreshed:
+        update_github_secret("BOX_ACCESS_TOKEN", access_token)
     update_github_secret("BOX_REFRESH_TOKEN", new_refresh_token)
 
     print(f"\n완료! ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})")
