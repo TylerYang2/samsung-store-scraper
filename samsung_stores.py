@@ -39,42 +39,57 @@ def scrape_stores() -> list[dict]:
         )
         page = context.new_page()
 
-        requests_log = []
-        responses_log = []
-
-        def handle_request(request):
-            if "selectMakeListAjax" in request.url:
-                requests_log.append({
-                    "method": request.method,
-                    "url": request.url,
-                    "post_data": request.post_data,
-                })
+        sido_responses = []
 
         def handle_response(response):
             try:
                 if response.status == 200 and "selectMakeListAjax" in response.url:
-                    data = response.json()
-                    responses_log.append(data)
+                    sido_responses.append(response.json())
             except Exception:
                 pass
 
-        page.on("request", handle_request)
         page.on("response", handle_response)
         page.goto(SAMSUNG_URL, wait_until="networkidle", timeout=30000)
 
-        # 요청/응답 덤프
-        print(f"  [REQUESTS] {len(requests_log)}개:")
-        for r in requests_log:
-            print(f"    {r['method']} {r['url'].split('samsungstore.com')[-1]}")
-            if r["post_data"]:
-                print(f"      body: {r['post_data']}")
+        # 시도 코드 목록 추출
+        region_codes = []
+        for data in sido_responses:
+            if isinstance(data, list) and data and "CODE" in data[0]:
+                region_codes = [item["CODE"] for item in data if "CODE" in item]
+                break
+        print(f"  [REGION] {len(region_codes)}개 시도 코드")
 
-        print(f"  [RESPONSES] {len(responses_log)}개:")
-        for i, data in enumerate(responses_log):
-            if isinstance(data, list):
-                print(f"    [{i}] list[{len(data)}], first: {data[0] if data else 'empty'}")
-            elif isinstance(data, dict):
-                print(f"    [{i}] dict keys: {list(data.keys())}")
+        # 각 시도별 매장 HTML 요청 (세션 쿠키 포함)
+        seen = set()
+        for i, code in enumerate(region_codes):
+            try:
+                html_text = page.evaluate("""async (code) => {
+                    const resp = await fetch('/shop/selectMakeListAjax.sesc', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8',
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'Accept': 'application/json, text/javascript, */*; q=0.01'
+                        },
+                        body: 'sType=gugun&keyword=' + code + '&pageGubun=shop'
+                    });
+                    return await resp.text();
+                }""", code)
+
+                if i == 0:
+                    print(f"  [HTML 응답 샘플]:\n{html_text[:800]}")
+
+                items = _parse_store_html(html_text)
+                new_count = 0
+                for item in items:
+                    key = (item.get("name", ""), item.get("address", ""))
+                    if key not in seen:
+                        seen.add(key)
+                        stores.append(item)
+                        new_count += 1
+                print(f"    {code} → {new_count}개")
+            except Exception as e:
+                print(f"    [WARN] {code}: {e}")
 
         browser.close()
 
@@ -82,51 +97,26 @@ def scrape_stores() -> list[dict]:
     return stores
 
 
-def _extract_items_from_json(data) -> list[dict]:
-    """JSON 응답에서 매장 목록 추출"""
-    items = []
-    if isinstance(data, list):
-        items = data
-    elif isinstance(data, dict):
-        for key in ("list", "data", "shopList", "storeList", "result"):
-            if isinstance(data.get(key), list):
-                items = data[key]
-                break
-
-    result = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        store = {
-            "name": item.get("shopNm") or item.get("storeName") or item.get("name") or item.get("shopName") or "",
-            "address": item.get("addr") or item.get("address") or item.get("shopAddr") or "",
-            "tel": item.get("tel") or item.get("phone") or item.get("telNo") or "",
-        }
-        if store["name"]:
-            result.append(store)
-    return result
-
-
-def _parse_store_dom(page) -> list[dict]:
-    """DOM에서 직접 매장 정보 파싱"""
+def _parse_store_html(html_text: str) -> list[dict]:
+    """HTML 응답에서 매장 목록 파싱"""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html_text, "html.parser")
     stores = []
     selectors = [
-        "ul.store-list li", ".store-list li", "ul.shop-list li",
-        ".shop-list li", ".store-item", ".shop-item",
+        ("li", ".store-name, .shop-name, strong, h3, h4, .name"),
+        ("li", "a"),
     ]
-    for sel in selectors:
-        els = page.query_selector_all(sel)
-        if els:
-            for el in els:
-                name_el = el.query_selector(".store-name, .shop-name, strong, h3, h4, .name")
-                addr_el = el.query_selector(".address, .addr, .store-addr")
-                tel_el = el.query_selector(".tel, .phone, .contact")
-                name = name_el.inner_text().strip() if name_el else el.inner_text()[:30].strip()
-                addr = addr_el.inner_text().strip() if addr_el else ""
-                tel = tel_el.inner_text().strip() if tel_el else ""
-                if name:
-                    stores.append({"name": name, "address": addr, "tel": tel})
-            break
+    # li 기반 파싱 시도
+    lis = soup.find_all("li")
+    for li in lis:
+        name_el = li.find(class_=lambda c: c and any(x in c for x in ["name", "tit", "store"]))
+        addr_el = li.find(class_=lambda c: c and any(x in c for x in ["addr", "address"]))
+        tel_el = li.find(class_=lambda c: c and any(x in c for x in ["tel", "phone"]))
+        name = name_el.get_text(strip=True) if name_el else li.get_text(strip=True)[:40]
+        addr = addr_el.get_text(strip=True) if addr_el else ""
+        tel = tel_el.get_text(strip=True) if tel_el else ""
+        if name and len(name) > 2:
+            stores.append({"name": name, "address": addr, "tel": tel})
     return stores
 
 
