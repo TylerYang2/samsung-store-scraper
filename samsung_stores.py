@@ -159,12 +159,12 @@ def _extract_items_from_json(data) -> list[dict]:
     for item in items:
         if not isinstance(item, dict):
             continue
-        name = (item.get("shopNm") or item.get("SHOP_NM") or item.get("storeName") or
-                item.get("name") or item.get("shopName") or "")
+        name = (item.get("dist_place_nm") or item.get("shopNm") or item.get("SHOP_NM") or
+                item.get("storeName") or item.get("name") or item.get("shopName") or "")
         addr = (item.get("addr") or item.get("ADDR") or item.get("address") or
                 item.get("shopAddr") or item.get("roadAddr") or item.get("ROAD_ADDR") or "")
-        tel = (item.get("tel") or item.get("TEL") or item.get("telNo") or
-               item.get("TEL_NO") or item.get("phone") or "")
+        tel = (item.get("tel") or item.get("tel_no") or item.get("TEL") or
+               item.get("telNo") or item.get("TEL_NO") or item.get("phone") or "")
         if name:
             result.append({"name": name, "address": addr, "tel": tel})
     return result
