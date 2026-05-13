@@ -39,65 +39,42 @@ def scrape_stores() -> list[dict]:
         )
         page = context.new_page()
 
-        ajax_queue = []
+        requests_log = []
+        responses_log = []
+
+        def handle_request(request):
+            if "selectMakeListAjax" in request.url:
+                requests_log.append({
+                    "method": request.method,
+                    "url": request.url,
+                    "post_data": request.post_data,
+                })
 
         def handle_response(response):
             try:
                 if response.status == 200 and "selectMakeListAjax" in response.url:
                     data = response.json()
-                    ajax_queue.append(data)
+                    responses_log.append(data)
             except Exception:
                 pass
 
+        page.on("request", handle_request)
         page.on("response", handle_response)
         page.goto(SAMSUNG_URL, wait_until="networkidle", timeout=30000)
 
-        # 초기 AJAX: 지역 코드 목록 추출
-        region_codes = []
-        for data in ajax_queue:
-            if isinstance(data, list) and data and "CODE" in data[0]:
-                region_codes = [item["CODE"] for item in data if "CODE" in item]
-                break
+        # 요청/응답 덤프
+        print(f"  [REQUESTS] {len(requests_log)}개:")
+        for r in requests_log:
+            print(f"    {r['method']} {r['url'].split('samsungstore.com')[-1]}")
+            if r["post_data"]:
+                print(f"      body: {r['post_data']}")
 
-        print(f"  [REGION] {len(region_codes)}개 지역 코드 확보")
-        if not region_codes:
-            print("  [WARN] 지역 코드 없음, 종료")
-            browser.close()
-            return stores
-
-        # 각 지역별 매장 fetch (page.evaluate로 세션 쿠키 포함 요청)
-        seen = set()
-        for i, code in enumerate(region_codes):
-            try:
-                data = page.evaluate("""async (code) => {
-                    const resp = await fetch('/shop/selectMakeListAjax.sesc', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/x-www-form-urlencoded',
-                            'X-Requested-With': 'XMLHttpRequest'
-                        },
-                        body: 'CODE=' + code
-                    });
-                    const text = await resp.text();
-                    try { return JSON.parse(text); }
-                    catch { return {'_raw': text.slice(0, 300)}; }
-                }""", code)
-
-                # 첫 번째 응답 구조 출력
-                if i == 0:
-                    print(f"  [STORE DATA 구조] {str(data)[:400]}")
-
-                items = _extract_items_from_json(data)
-                new_count = 0
-                for item in items:
-                    key = (item.get("name", ""), item.get("address", ""))
-                    if key not in seen:
-                        seen.add(key)
-                        stores.append(item)
-                        new_count += 1
-                print(f"    code={code} → {new_count}개")
-            except Exception as e:
-                print(f"    [WARN] code={code}: {e}")
+        print(f"  [RESPONSES] {len(responses_log)}개:")
+        for i, data in enumerate(responses_log):
+            if isinstance(data, list):
+                print(f"    [{i}] list[{len(data)}], first: {data[0] if data else 'empty'}")
+            elif isinstance(data, dict):
+                print(f"    [{i}] dict keys: {list(data.keys())}")
 
         browser.close()
 
