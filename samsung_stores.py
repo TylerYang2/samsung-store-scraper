@@ -24,52 +24,106 @@ GH_REPO           = os.environ.get("GITHUB_REPOSITORY", "")  # owner/repo
 
 
 # ── 1. 스크래핑 ───────────────────────────────────────
+BASE_URL = "https://www.samsungstore.com"
+
+# 한국 시도 코드 (사이트 공통 패턴)
+SIDO_LIST = [
+    "서울", "경기", "인천", "부산", "대구", "대전",
+    "광주", "울산", "강원", "충북", "충남", "경북",
+    "경남", "전북", "전남", "제주", "세종",
+]
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.3.1 Safari/605.1.15"
+    ),
+    "Accept-Language": "ko-KR,ko;q=0.9",
+    "Referer": SAMSUNG_URL,
+    "X-Requested-With": "XMLHttpRequest",
+}
+
+
+def find_ajax_endpoint(soup: BeautifulSoup, session: requests.Session) -> str | None:
+    """인라인/외부 JS에서 매장 목록 AJAX 엔드포인트 탐색"""
+    ajax_patterns = [
+        r'["\']([^"\']*(?:shopList|storeList|findShop|shopSearch)[^"\']*\.sesc)["\']',
+        r'url\s*:\s*["\']([^"\']+\.sesc)["\']',
+        r'ajax\(["\']([^"\']+\.sesc)["\']',
+    ]
+
+    all_js = [s.string for s in soup.find_all("script") if s.string]
+
+    # 외부 JS 파일도 다운로드해서 탐색
+    for tag in soup.find_all("script", src=True):
+        src = tag["src"]
+        if "samsungstore.com" in src or src.startswith("/"):
+            url = src if src.startswith("http") else BASE_URL + src
+            try:
+                r = session.get(url, timeout=10)
+                all_js.append(r.text)
+            except Exception:
+                pass
+
+    for js in all_js:
+        for pat in ajax_patterns:
+            m = re.search(pat, js)
+            if m:
+                path = m.group(1)
+                endpoint = path if path.startswith("http") else BASE_URL + "/" + path.lstrip("/")
+                print(f"  → AJAX 엔드포인트 발견: {endpoint}")
+                return endpoint
+
+    return None
+
+
+def fetch_stores_by_sido(session: requests.Session, endpoint: str, sido: str) -> list[dict]:
+    """시도별 매장 목록 AJAX 호출"""
+    payloads = [
+        {"sido": sido, "menu": "w401"},
+        {"sidoNm": sido, "menu": "w401"},
+        {"sido": sido},
+        {"sidoNm": sido},
+    ]
+    for data in payloads:
+        try:
+            r = session.post(endpoint, data=data, headers=HEADERS, timeout=15)
+            if r.status_code == 200:
+                try:
+                    result = r.json()
+                    items = result if isinstance(result, list) else result.get("list") or result.get("data") or []
+                    if items:
+                        return [dict(item, sido=sido) for item in items]
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    return []
+
+
 def scrape_stores() -> list[dict]:
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.3.1 Safari/605.1.15"
-        ),
-        "Accept-Language": "ko-KR,ko;q=0.9",
-        "Referer": "https://www.samsungstore.com/main/main.sesc",
-    }
+    session = requests.Session()
 
     print("Samsung Store 페이지 가져오는 중...")
-    resp = requests.get(SAMSUNG_URL, headers=headers, timeout=30)
+    resp = session.get(SAMSUNG_URL, headers=HEADERS, timeout=30)
     resp.raise_for_status()
     print(f"  → {resp.status_code}, {len(resp.text):,} bytes")
 
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    # JS 변수에서 배열 추출 (흔한 패턴 순서대로 시도)
-    patterns = [
-        r'var\s+shopList\s*=\s*(\[[\s\S]*?\])\s*;',
-        r'var\s+storeList\s*=\s*(\[[\s\S]*?\])\s*;',
-        r'shopList\s*:\s*(\[[\s\S]*?\])',
-        r'storeList\s*:\s*(\[[\s\S]*?\])',
-        r'JSON\.parse\([\'"](\[[\s\S]*?\])[\'"]\)',
-    ]
+    # AJAX 엔드포인트 탐색
+    endpoint = find_ajax_endpoint(soup, session)
 
-    for script in soup.find_all("script"):
-        if not script.string:
-            continue
-        text = script.string
-        for pat in patterns:
-            m = re.search(pat, text)
-            if m:
-                raw = m.group(1)
-                # JSON.parse 패턴이면 이스케이프 해제
-                if "JSON.parse" in pat:
-                    raw = raw.encode().decode("unicode_escape")
-                try:
-                    data = json.loads(raw)
-                    if data and isinstance(data[0], dict):
-                        print(f"  → JS 변수 발견: {len(data)}개 매장")
-                        return data
-                except Exception:
-                    pass
+    if endpoint:
+        all_stores = []
+        for sido in SIDO_LIST:
+            stores = fetch_stores_by_sido(session, endpoint, sido)
+            print(f"  → {sido}: {len(stores)}개")
+            all_stores.extend(stores)
+        if all_stores:
+            return all_stores
 
-    # HTML fallback: data-* 속성 또는 li 태그
+    # HTML에서 직접 파싱 시도 (data-* 속성)
     stores = []
     for el in soup.find_all(attrs={"data-shopnm": True}):
         stores.append({k.replace("data-", ""): v for k, v in el.attrs.items()})
@@ -77,12 +131,16 @@ def scrape_stores() -> list[dict]:
         print(f"  → HTML data 속성에서 {len(stores)}개 매장 발견")
         return stores
 
-    # 디버그 출력 후 종료
-    print("\n[ERROR] 매장 데이터를 찾지 못했습니다. JS 블록 일부:")
+    # 모두 실패 시 디버그 출력
+    print("\n[ERROR] 매장 데이터를 찾지 못했습니다. 외부 JS 파일 목록:")
+    for tag in soup.find_all("script", src=True):
+        src = tag.get("src", "")
+        if "samsungstore" in src:
+            print(f"  {src}")
+    print("\n인라인 JS (첫 번째 블록 600자):")
     for script in soup.find_all("script"):
         if script.string and len(script.string) > 300:
             print(script.string[:600])
-            print("---")
             break
     sys.exit(1)
 
