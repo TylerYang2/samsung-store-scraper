@@ -187,9 +187,14 @@ def _nominatim_geocode(address: str):
     import re
     if not address or len(address) < 3:
         return None, None
-    # 괄호 안 건물명 제거 후 시도, 실패 시 원본으로 재시도
+    # 괄호 제거
     clean = re.sub(r'\(.*?\)', '', address).strip()
-    for query in ([clean, address] if clean != address else [address]):
+    # 도로명+번지만 추출 (번지 이후 층/건물명 제거)
+    m = re.search(r'^(.+?(?:로|길|대로)\s+\d+(?:-\d+)?)', clean)
+    short = m.group(1).strip() if m else clean
+    # 순서대로 시도: 짧은주소 → 괄호제거 → 원본
+    queries = list(dict.fromkeys([short, clean, address]))
+    for query in queries:
         try:
             resp = requests.get(
                 "https://nominatim.openstreetmap.org/search",
@@ -200,9 +205,9 @@ def _nominatim_geocode(address: str):
             results = resp.json()
             if results:
                 return float(results[0]["lat"]), float(results[0]["lon"])
-            _time.sleep(1.1)
         except Exception as e:
             print(f"    [geocode WARN] {address[:30]}: {e}")
+        _time.sleep(1.1)
     return None, None
 
 
