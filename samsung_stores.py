@@ -33,75 +33,85 @@ def scrape_stores() -> list[dict]:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            locale="ko-KR",
+        )
+        page = context.new_page()
 
-        # 네트워크 응답 인터셉트
+        # 모든 JSON/.sesc 응답 캡처
         ajax_responses = []
+        all_json_urls = []
 
         def handle_response(response):
-            if "selectMakeListAjax" in response.url or "shopList" in response.url or "storeList" in response.url:
-                try:
-                    data = response.json()
-                    ajax_responses.append(data)
-                except Exception:
-                    pass
+            try:
+                if response.status != 200:
+                    return
+                ct = response.headers.get("content-type", "")
+                url = response.url
+                if "json" in ct or ".sesc" in url:
+                    all_json_urls.append(url.split("samsungstore.com")[-1][:80])
+                    try:
+                        data = response.json()
+                        ajax_responses.append((url, data))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
         page.on("response", handle_response)
-
         page.goto(SAMSUNG_URL, wait_until="networkidle", timeout=30000)
 
-        # 시도 선택 UI 찾기 - 여러 셀렉터 시도
-        sido_selectors = [
-            "ul.sido-list li a", "ul.area-list li a", ".sido-wrap li a",
-            "ul.tab-list li a", ".region-list li a", "a[data-sido]",
-            "ul.shop-tab li a", ".sido li", ".area li a",
-        ]
+        # 캡처된 응답 출력
+        print(f"  [NET] JSON/.sesc 응답 {len(all_json_urls)}개:")
+        for u in all_json_urls[:15]:
+            print(f"    {u}")
 
-        sido_elements = []
-        for sel in sido_selectors:
-            els = page.query_selector_all(sel)
-            if els:
-                print(f"  → 시도 UI 발견: {sel} ({len(els)}개)")
-                sido_elements = els
-                break
+        # 서울/경기 텍스트 요소 찾기
+        for region in ["서울", "경기"]:
+            try:
+                loc = page.get_by_text(region, exact=True)
+                if loc.count() > 0:
+                    el = loc.first
+                    tag = el.evaluate("el => el.tagName.toLowerCase()")
+                    cls = el.get_attribute("class") or ""
+                    onclick = el.get_attribute("onclick") or ""
+                    parent_html = el.evaluate("el => el.parentElement?.outerHTML?.slice(0,300)") or ""
+                    print(f"  [REGION] '{region}': <{tag}> class='{cls}' onclick='{onclick[:80]}'")
+                    print(f"    parent: {parent_html[:200]}")
+            except Exception as e:
+                print(f"  [REGION] '{region}' 탐색 실패: {e}")
 
-        if sido_elements:
-            # 각 시도 클릭하며 데이터 수집
-            for el in sido_elements:
-                try:
-                    text = el.inner_text().strip()
-                    print(f"  → 클릭: {text}")
-                    ajax_responses.clear()
-                    el.click()
-                    page.wait_for_timeout(2000)
+        # onclick에 sido/area 포함 요소
+        try:
+            onclick_els = page.query_selector_all("[onclick*='sido'],[onclick*='Sido'],[onclick*='area'],[onclick*='Area'],[onclick*='shop'],[onclick*='Shop']")
+            print(f"  [ONCLICK] sido/area/shop 요소 {len(onclick_els)}개")
+            for el in onclick_els[:5]:
+                print(f"    {el.evaluate('el => el.outerHTML')[:200]}")
+        except Exception as e:
+            print(f"  [ONCLICK] 탐색 실패: {e}")
 
-                    # AJAX 응답이 있으면 파싱
-                    for resp_data in ajax_responses:
-                        items = _extract_items_from_json(resp_data)
-                        stores.extend(items)
+        # select 요소 탐색
+        try:
+            for sel_el in page.query_selector_all("select"):
+                name = sel_el.get_attribute("name") or sel_el.get_attribute("id") or ""
+                opts = sel_el.query_selector_all("option")
+                print(f"  [SELECT] name='{name}' {len(opts)}개 옵션")
+                for opt in opts[:5]:
+                    print(f"    value='{opt.get_attribute('value')}' text='{opt.inner_text().strip()}'")
+        except Exception as e:
+            print(f"  [SELECT] 탐색 실패: {e}")
 
-                    # AJAX 없으면 DOM 파싱
-                    if not ajax_responses:
-                        items = _parse_store_dom(page)
-                        stores.extend(items)
-                except Exception as e:
-                    print(f"    [WARN] {e}")
-        else:
-            # 시도 UI를 못 찾으면 페이지 전체 DOM 파싱 + 디버그 출력
-            print("  [WARN] 시도 UI를 찾지 못함, DOM 덤프:")
-            for tag in page.query_selector_all("[class]")[:20]:
-                cls = tag.get_attribute("class") or ""
-                txt = tag.inner_text()[:40].replace("\n", " ")
-                print(f"    class='{cls}' text='{txt}'")
-
-            # AJAX 응답으로 시도
-            for resp_data in ajax_responses:
-                items = _extract_items_from_json(resp_data)
-                stores.extend(items)
-
-            if not stores:
-                items = _parse_store_dom(page)
-                stores.extend(items)
+        # body HTML 덤프 (scripts/styles 제거)
+        try:
+            body_html = page.eval_on_selector("body", """el => {
+                let cl = el.cloneNode(true);
+                cl.querySelectorAll('script,style').forEach(e => e.remove());
+                return cl.innerHTML.slice(0, 6000);
+            }""")
+            print(f"  [BODY HTML]:\n{body_html}")
+        except Exception as e:
+            print(f"  [BODY] 실패: {e}")
 
         browser.close()
 
