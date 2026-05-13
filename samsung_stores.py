@@ -4,6 +4,7 @@ import sys
 import base64
 import tempfile
 import time as _time
+import urllib.parse
 from datetime import datetime
 
 import requests
@@ -51,45 +52,90 @@ def scrape_stores() -> list[dict]:
         page.on("response", handle_response)
         page.goto(SAMSUNG_URL, wait_until="networkidle", timeout=30000)
 
-        # 시도 코드 목록 추출
-        region_codes = []
+        # 시도 코드 추출 (SI_DO_ORDERNUM 키로 구분)
+        sido_codes = []
         for data in sido_responses:
-            if isinstance(data, list) and data and "CODE" in data[0]:
-                region_codes = [item["CODE"] for item in data if "CODE" in item]
+            if isinstance(data, list) and data and "SI_DO_ORDERNUM" in data[0]:
+                sido_codes = [item["CODE"] for item in data]
                 break
-        print(f"  [REGION] {len(region_codes)}개 시도 코드")
+        print(f"  [SIDO] {len(sido_codes)}개 시도 코드 확보")
 
-        # 각 시도별 매장 HTML 요청 (세션 쿠키 포함)
         seen = set()
-        for i, code in enumerate(region_codes):
-            try:
-                html_text = page.evaluate("""async (code) => {
-                    const resp = await fetch('/shop/selectMakeListAjax.sesc', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8',
-                            'X-Requested-With': 'XMLHttpRequest',
-                            'Accept': 'application/json, text/javascript, */*; q=0.01'
-                        },
-                        body: 'sType=gugun&keyword=' + code + '&pageGubun=shop'
-                    });
-                    return await resp.text();
-                }""", code)
+        first_response = True
 
-                if i == 0:
-                    print(f"  [HTML 응답 샘플]:\n{html_text[:800]}")
+        for sido_code in sido_codes:
+            sido_name = urllib.parse.unquote(sido_code)
 
-                items = _parse_store_html(html_text)
-                new_count = 0
-                for item in items:
-                    key = (item.get("name", ""), item.get("address", ""))
-                    if key not in seen:
-                        seen.add(key)
-                        stores.append(item)
-                        new_count += 1
-                print(f"    {code} → {new_count}개")
-            except Exception as e:
-                print(f"    [WARN] {code}: {e}")
+            # 구군 목록
+            gugun_raw = page.evaluate("""async (code) => {
+                const resp = await fetch('/shop/selectMakeListAjax.sesc', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'Accept': 'application/json, text/javascript, */*; q=0.01'
+                    },
+                    body: 'sType=gugun&keyword=' + code + '&pageGubun=shop'
+                });
+                const t = await resp.text();
+                try { return JSON.parse(t); } catch { return null; }
+            }""", sido_code)
+
+            if isinstance(gugun_raw, list) and gugun_raw and "CODE" in gugun_raw[0]:
+                gugun_list = [(urllib.parse.unquote(g["CODE"]), int(g.get("CNT", 0)))
+                              for g in gugun_raw]
+            else:
+                gugun_list = [(sido_name, 0)]
+
+            sido_count = 0
+            for gugun_name, cnt in gugun_list:
+                select_text = f"{sido_name} {gugun_name}"
+                page_no = 1
+                while True:
+                    store_raw = page.evaluate("""async ([text, pageNo]) => {
+                        const enc = encodeURIComponent(text);
+                        const body = [
+                            'pageNo=' + pageNo,
+                            'searchText=', 'strDpsType=',
+                            'neLat=', 'neLng=', 'swLat=', 'swLng=',
+                            'selectType=0',
+                            'selectText=' + enc,
+                            'nearPost=' + enc,
+                            'nearYn=N', 'distPlaceCd='
+                        ].join('&');
+                        const resp = await fetch('/shop/selectSearchMapListAjax.sesc', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8',
+                                'X-Requested-With': 'XMLHttpRequest',
+                                'Accept': 'application/json, text/javascript, */*; q=0.01'
+                            },
+                            body: body
+                        });
+                        const t = await resp.text();
+                        try { return JSON.parse(t); } catch { return {'_raw': t.slice(0, 300)}; }
+                    }""", [select_text, page_no])
+
+                    if first_response:
+                        print(f"  [STORE 응답 구조] {str(store_raw)[:600]}")
+                        first_response = False
+
+                    items = _extract_items_from_json(store_raw)
+                    if not items:
+                        break
+                    new_items = 0
+                    for item in items:
+                        key = (item.get("name", ""), item.get("address", ""))
+                        if key not in seen:
+                            seen.add(key)
+                            stores.append(item)
+                            new_items += 1
+                            sido_count += 1
+                    if new_items == 0:
+                        break
+                    page_no += 1
+
+            print(f"  ✓ {sido_name}: {sido_count}개")
 
         browser.close()
 
@@ -97,27 +143,31 @@ def scrape_stores() -> list[dict]:
     return stores
 
 
-def _parse_store_html(html_text: str) -> list[dict]:
-    """HTML 응답에서 매장 목록 파싱"""
-    from bs4 import BeautifulSoup
-    soup = BeautifulSoup(html_text, "html.parser")
-    stores = []
-    selectors = [
-        ("li", ".store-name, .shop-name, strong, h3, h4, .name"),
-        ("li", "a"),
-    ]
-    # li 기반 파싱 시도
-    lis = soup.find_all("li")
-    for li in lis:
-        name_el = li.find(class_=lambda c: c and any(x in c for x in ["name", "tit", "store"]))
-        addr_el = li.find(class_=lambda c: c and any(x in c for x in ["addr", "address"]))
-        tel_el = li.find(class_=lambda c: c and any(x in c for x in ["tel", "phone"]))
-        name = name_el.get_text(strip=True) if name_el else li.get_text(strip=True)[:40]
-        addr = addr_el.get_text(strip=True) if addr_el else ""
-        tel = tel_el.get_text(strip=True) if tel_el else ""
-        if name and len(name) > 2:
-            stores.append({"name": name, "address": addr, "tel": tel})
-    return stores
+def _extract_items_from_json(data) -> list[dict]:
+    if isinstance(data, dict) and "_raw" in data:
+        return []
+    items = []
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        for key in ("list", "data", "shopList", "storeList", "result",
+                    "shopInfoList", "resultList", "rows"):
+            if isinstance(data.get(key), list):
+                items = data[key]
+                break
+    result = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = (item.get("shopNm") or item.get("SHOP_NM") or item.get("storeName") or
+                item.get("name") or item.get("shopName") or "")
+        addr = (item.get("addr") or item.get("ADDR") or item.get("address") or
+                item.get("shopAddr") or item.get("roadAddr") or item.get("ROAD_ADDR") or "")
+        tel = (item.get("tel") or item.get("TEL") or item.get("telNo") or
+               item.get("TEL_NO") or item.get("phone") or "")
+        if name:
+            result.append({"name": name, "address": addr, "tel": tel})
+    return result
 
 
 def geocode_df(df: pd.DataFrame) -> pd.DataFrame:
