@@ -221,6 +221,7 @@ def box_refresh_token(refresh_token: str) -> tuple[str, str]:
         },
         timeout=15,
     )
+    print(f"  [Box 토큰] status={resp.status_code} body={resp.text[:300]}")
     resp.raise_for_status()
     data = resp.json()
     return data["access_token"], data["refresh_token"]
