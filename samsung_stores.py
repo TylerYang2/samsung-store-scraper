@@ -106,25 +106,30 @@ def find_ajax_params(soup: BeautifulSoup, session: requests.Session, endpoint: s
     return {}
 
 
-def fetch_stores_by_sido(session: requests.Session, endpoint: str, sido: str, debug: bool = False) -> list[dict]:
-    """시도별 매장 목록 AJAX 호출"""
+def fetch_stores_by_sido(session: requests.Session, endpoint: str, sido: str) -> list[dict]:
+    """시도별 매장 목록 - JSON 또는 HTML 응답 모두 처리"""
+    # /shop/ 경로 포함 버전도 시도
+    endpoints = [endpoint, endpoint.replace("/selectMakeListAjax", "/shop/selectMakeListAjax")]
+
     payloads = [
-        {"sidoCd": sido, "menu": "w401"},
+        {"sidoCd": sido},
+        {"sido": sido},
+        {"areaCd": sido},
+        {"sidoNm": sido},
         {"sido": sido, "menu": "w401"},
-        {"areaCd": sido, "menu": "w401"},
-        {"sidoNm": sido, "menu": "w401"},
-        {"sido": sido, "gubun": "sido"},
-        {"searchType": "sido", "searchWord": sido},
+        {"sidoCd": sido, "menu": "w401", "nearYn": "N"},
     ]
-    for data in payloads:
-        for method in ["post", "get"]:
-            try:
-                fn = session.post if method == "post" else session.get
-                kwargs = {"data": data} if method == "post" else {"params": data}
-                r = fn(endpoint, headers=HEADERS, timeout=15, **kwargs)
-                if r.status_code == 200 and r.text.strip():
-                    if debug:
-                        print(f"  [DEBUG] {method.upper()} {data} → {r.text[:300]}")
+
+    for ep in endpoints:
+        for data in payloads:
+            for method in ["post", "get"]:
+                try:
+                    fn = session.post if method == "post" else session.get
+                    kwargs = {"data": data} if method == "post" else {"params": data}
+                    r = fn(ep, headers=HEADERS, timeout=15, **kwargs)
+                    if r.status_code != 200 or not r.text.strip():
+                        continue
+                    # JSON 시도
                     try:
                         result = r.json()
                         items = result if isinstance(result, list) else (
@@ -132,11 +137,23 @@ def fetch_stores_by_sido(session: requests.Session, endpoint: str, sido: str, de
                             result.get("shopList") or result.get("storeList") or []
                         )
                         if items:
+                            print(f"    ✓ {ep} {method.upper()} {data} → JSON {len(items)}개")
                             return [dict(item, sido=sido) for item in items]
                     except Exception:
                         pass
-            except Exception:
-                pass
+                    # HTML fragment 시도
+                    if "<li" in r.text:
+                        frag = BeautifulSoup(r.text, "html.parser")
+                        items = []
+                        for li in frag.find_all("li"):
+                            text = li.get_text(" ", strip=True)
+                            if text:
+                                items.append({"raw": text, "sido": sido})
+                        if items:
+                            print(f"    ✓ {ep} {method.upper()} {data} → HTML {len(items)}개")
+                            return items
+                except Exception:
+                    pass
     return []
 
 
