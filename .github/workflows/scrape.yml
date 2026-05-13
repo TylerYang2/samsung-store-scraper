@@ -1,0 +1,32 @@
+name: Samsung Store Scraper
+
+on:
+  schedule:
+    - cron: '0 21 1 * *'  # 매월 1일 오전 6시 KST (UTC 21:00 전날)
+  workflow_dispatch:        # 수동 실행
+
+concurrency:
+  group: samsung-scraper
+  cancel-in-progress: false  # 중복 실행 방지 (토큰 충돌 방지)
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scraper
+        env:
+          BOX_CLIENT_ID:     ${{ secrets.BOX_CLIENT_ID }}
+          BOX_CLIENT_SECRET: ${{ secrets.BOX_CLIENT_SECRET }}
+          BOX_REFRESH_TOKEN: ${{ secrets.BOX_REFRESH_TOKEN }}
+          GH_PAT:            ${{ secrets.GH_PAT }}
+        run: python samsung_stores.py
