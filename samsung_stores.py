@@ -52,49 +52,52 @@ def scrape_stores() -> list[dict]:
         page.on("response", handle_response)
         page.goto(SAMSUNG_URL, wait_until="networkidle", timeout=30000)
 
-        # 초기 AJAX 응답 처리 (페이지 로드 시 자동 호출됨)
-        print(f"  [NET] 초기 AJAX 응답: {len(ajax_queue)}개")
-        if ajax_queue:
-            first = ajax_queue[0]
-            if isinstance(first, dict):
-                print(f"    keys: {list(first.keys())}")
-                for k, v in list(first.items())[:3]:
-                    print(f"    {k}: {str(v)[:200]}")
-            elif isinstance(first, list) and first:
-                print(f"    list[{len(first)}], first item: {first[0]}")
-
-        seen = set()
+        # 초기 AJAX: 지역 코드 목록 추출
+        region_codes = []
         for data in ajax_queue:
-            for item in _extract_items_from_json(data):
-                key = (item.get("name", ""), item.get("address", ""))
-                if key not in seen:
-                    seen.add(key)
-                    stores.append(item)
-        ajax_queue.clear()
+            if isinstance(data, list) and data and "CODE" in data[0]:
+                region_codes = [item["CODE"] for item in data if "CODE" in item]
+                break
 
-        # 시도 선택 UI 클릭하며 추가 데이터 수집
-        sido_elements = page.query_selector_all("li[class*='area_sido'] a")
-        print(f"  [SIDO] {len(sido_elements)}개 지역 발견")
+        print(f"  [REGION] {len(region_codes)}개 지역 코드 확보")
+        if not region_codes:
+            print("  [WARN] 지역 코드 없음, 종료")
+            browser.close()
+            return stores
 
-        for el in sido_elements:
+        # 각 지역별 매장 fetch (page.evaluate로 세션 쿠키 포함 요청)
+        seen = set()
+        for i, code in enumerate(region_codes):
             try:
-                text = el.inner_text().strip()
-                ajax_queue.clear()
-                el.click()
-                page.wait_for_timeout(2000)
+                data = page.evaluate("""async (code) => {
+                    const resp = await fetch('/shop/selectMakeListAjax.sesc', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                            'X-Requested-With': 'XMLHttpRequest'
+                        },
+                        body: 'CODE=' + code
+                    });
+                    const text = await resp.text();
+                    try { return JSON.parse(text); }
+                    catch { return {'_raw': text.slice(0, 300)}; }
+                }""", code)
 
+                # 첫 번째 응답 구조 출력
+                if i == 0:
+                    print(f"  [STORE DATA 구조] {str(data)[:400]}")
+
+                items = _extract_items_from_json(data)
                 new_count = 0
-                for data in ajax_queue:
-                    for item in _extract_items_from_json(data):
-                        key = (item.get("name", ""), item.get("address", ""))
-                        if key not in seen:
-                            seen.add(key)
-                            stores.append(item)
-                            new_count += 1
-
-                print(f"    ✓ '{text}' → 신규 {new_count}개 (AJAX {len(ajax_queue)}개)")
+                for item in items:
+                    key = (item.get("name", ""), item.get("address", ""))
+                    if key not in seen:
+                        seen.add(key)
+                        stores.append(item)
+                        new_count += 1
+                print(f"    code={code} → {new_count}개")
             except Exception as e:
-                print(f"    [WARN] {e}")
+                print(f"    [WARN] code={code}: {e}")
 
         browser.close()
 
