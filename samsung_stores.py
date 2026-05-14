@@ -23,6 +23,7 @@ BOX_REFRESH_TOKEN = os.environ["BOX_REFRESH_TOKEN"]
 BOX_ACCESS_TOKEN  = os.environ.get("BOX_ACCESS_TOKEN", "")
 GH_PAT            = os.environ.get("GH_PAT", "")
 GH_REPO           = os.environ.get("GITHUB_REPOSITORY", "")  # owner/repo
+KAKAO_API_KEY     = os.environ.get("KAKAO_API_KEY", "")
 
 
 # ── 1. 스크래핑 ───────────────────────────────────────
@@ -128,6 +129,8 @@ def scrape_stores() -> list[dict]:
                         key = (item.get("name", ""), item.get("address", ""))
                         if key not in seen:
                             seen.add(key)
+                            item["sido"] = sido_name
+                            item["gugun"] = gugun_name
                             stores.append(item)
                             new_items += 1
                             sido_count += 1
@@ -170,17 +173,103 @@ def _extract_items_from_json(data) -> list[dict]:
     return result
 
 
+# 주소 기반 사전 좌표 테이블 (API 지오코딩 실패 대비)
+_KNOWN_COORDS: dict[str, tuple[float, float]] = {
+    '서울 강동구 상일로6길 26 내':                                       (37.5462, 127.1658),
+    '서울 강서구 하늘길 38 5F 삼성전자':                                  (37.5685, 126.8002),
+    '서울 광진구 아차산로 272 이마트 지하1층 삼성모바일':                  (37.5394, 127.0915),
+    '서울 노원구 마들로3길 15 (월계동, 일렉트로마트) 2층':                 (37.6168, 127.0614),
+    '서울 동대문구 왕산로 168(용두동, 삼성화재청량리사옥) 7층':            (37.5750, 127.0456),
+    '서울 서초구 성촌길 34 (우면동, (주)삼성전자서울R&D캠퍼스) F타워 B1F': (37.4765, 127.0349),
+    '서울 성동구 왕십리광장로 17 (행당동) 이마트 3F':                     (37.5613, 127.0379),
+    '서울 송파구 올림픽로 240 10F 삼성전자':                              (37.5133, 127.1000),
+    '서울 송파구 올림픽로35길 125 삼성SDS 타워서관 B1F':                  (37.5147, 127.1038),
+    '서울 영등포구 영중로 15 지하층 B1 이마트  영등포점':                  (37.5165, 126.9024),
+    '서울 영등포구 영중로 15 타임스퀘어 2층 교보문고 내 삼성스토어 모바일': (37.5165, 126.9024),
+    '서울 중구 을지로 51, 5F':                                           (37.5660, 126.9804),
+    '경기 고양시 고양대로 1955 스타필드고양 2F':                          (37.6557, 126.8308),
+    '경기 고양시 일산서구 킨텍스로 171 B1층 이마트킨텍스':                (37.6634, 126.8126),
+    '경기 광명시 서면로 79':                                              (37.4542, 126.8617),
+    '경기 부천시 석천로 188(중동) 일렉트로마트 1F':                       (37.5031, 126.7657),
+    '경기 부천시 원미구 길주로 180 7F 삼성전자':                          (37.5055, 126.7645),
+    '경기 성남시 분당구 성남대로925번길 16(성남(분당)여객자동차터미널)':    (37.3988, 127.1264),
+    '경기 수원시 권선구 수인로 291 3층':                                  (37.2622, 126.9944),
+    '경기 수원시 영통구 삼성로 129 (매탄동, 삼성전자) 수원디지털시티 중앙광장 B1F': (37.3249, 127.1085),
+    '경기 수원시 영통구 삼성로130 (매탄동) 컨벤션동(소재연구단지본관) 2층': (37.3255, 127.1092),
+    '경기 수원시 팔달구 덕영대로 924 5F 삼성전자':                        (37.2682, 127.0057),
+    '경기 시흥시 서해안로 699(정왕동) 신세계프리미엄아울렛 시흥점 2F.':   (37.3511, 126.7330),
+    '경기 안산시 단원구 원포공원 1로 46, 3F':                            (37.3216, 126.8360),
+    '경기 용인시 기흥구 삼성로 1(삼성전자(주)기흥캠퍼스)':               (37.2790, 127.0431),
+    '경기 용인시 수지구 포은대로 536((주)신세계백화점경기점)':             (37.3136, 127.1009),
+    '경기 평택시 고덕면 삼성로 114, 삼성전자 평택사업장 복지1동 1F 삼성스토어 모바일': (37.0347, 127.0800),
+    '경기 화성시 삼성전자로 1-1 삼성전자DSR타워 1층 삼성스토어 모바일':   (37.1963, 126.9780),
+    '부산 강서구 녹산산업중로 333 지하1층':                               (35.1082, 128.8524),
+    '부산 강서구 르노삼성대로 61 복합복지동1층 삼성모바일':               (35.0979, 128.8472),
+    '부산 금정구 중앙대로1841번길 24((주)이마트금정점)':                  (35.2509, 129.0797),
+    '부산 북구 낙동대로 1783(삼성전자판매(주)덕천점)':                    (35.2195, 128.9990),
+    '대전 동구 동서대로 1689 4층':                                        (36.3535, 127.4180),
+    '울산 남구 삼산로 261 별관2F 삼성딜라이트샵':                         (35.5395, 129.3319),
+    '울산 남구 삼산로 288 B1F 삼성전자':                                  (35.5418, 129.3300),
+    '울산 북구 염포로 599 현대차문화회관 지하1층':                        (35.5859, 129.3697),
+    '광주 북구 앰코로 100 복지관 1F':                                     (35.2282, 126.8441),
+    '강원 원주시 무실밤골길 29':                                          (37.3513, 127.9605),
+    '충남 아산시 탕정면 삼성로 181 비전홀3층 삼성 모바일 스토어':         (36.8138, 127.1052),
+    '충남 아산시 탕정면 탕정로 380-2 OLEX동 3층 모바일샵':               (36.8155, 127.1068),
+    '충남 천안시 동남구 만남로 43(신세계백화점) A관 4F':                  (36.7996, 127.1155),
+    '충남 천안시 동남구 만남로 43(신세계백화점) B관 M3F':                 (36.7996, 127.1155),
+    '충남 천안시 서북구 업성2길 89':                                      (36.8438, 127.1291),
+    '경북 구미시 구미대로 256(광평동) 이마트2F':                          (36.1277, 128.3371),
+    '경북 구미시 3공단3로 302 한마음프라자 1층 삼성스토어 모바일':        (36.0787, 128.4092),
+    '경북 상주시 상서문2길 110':                                          (36.4148, 128.1612),
+    '경남 창원시 성산구 두산볼보로 22 두산중공업 별관 1층':               (35.2205, 128.6808),
+    '전북 완주군 봉동읍 봉동로 466-19 (현대사원@문화관1층) 전주현대자동차점': (35.8622, 127.0818),
+    '전남 순천시 팔마로 191((주)이마트)':                                 (34.9454, 127.4875),
+    '세종특별자치시 연동면 삼성길 25':                                    (36.5558, 127.2182),
+}
+
+
 def geocode_df(df: pd.DataFrame) -> pd.DataFrame:
-    """주소 컬럼으로 lat/lng 추가. Nominatim 사용."""
+    """주소 컬럼으로 lat/lng 추가. 사전 테이블 → Kakao → Nominatim 순서로 시도."""
     lats, lngs = [], []
     for addr in df.get("address", []):
-        lat, lng = _nominatim_geocode(addr)
+        addr_str = str(addr).replace('&amp;', '&').strip() if addr and str(addr) != 'nan' else ''
+        # 1) 사전 좌표 테이블
+        if addr_str in _KNOWN_COORDS:
+            lat, lng = _KNOWN_COORDS[addr_str]
+            lats.append(lat)
+            lngs.append(lng)
+            continue
+        # 2) Kakao API
+        lat, lng = _kakao_geocode(addr_str) if KAKAO_API_KEY and addr_str else (None, None)
+        # 3) Nominatim fallback
+        if lat is None and addr_str:
+            lat, lng = _nominatim_geocode(addr_str)
+            if lat is not None:
+                print(f"    [Nominatim fallback] {addr_str[:40]}")
+            _time.sleep(1.1)
         lats.append(lat)
         lngs.append(lng)
-        _time.sleep(1.1)  # Nominatim rate limit
     df["lat"] = lats
     df["lng"] = lngs
     return df
+
+
+def _kakao_geocode(address: str):
+    if not address or len(address) < 3:
+        return None, None
+    try:
+        resp = requests.get(
+            "https://dapi.kakao.com/v2/local/search/address.json",
+            headers={"Authorization": f"KakaoAK {KAKAO_API_KEY}"},
+            params={"query": address, "size": 1},
+            timeout=10,
+        )
+        docs = resp.json().get("documents", [])
+        if docs:
+            return float(docs[0]["y"]), float(docs[0]["x"])
+    except Exception as e:
+        print(f"    [Kakao WARN] {address[:30]}: {e}")
+    return None, None
 
 
 def _nominatim_geocode(address: str):
@@ -316,6 +405,12 @@ def main():
     stores = scrape_stores()
     df = pd.DataFrame(stores)
     if len(df) > 0:
+        # 컬럼 순서 정리 (sido/gugun 앞에 배치)
+        cols = ["sido", "gugun", "name", "address", "tel"]
+        for c in cols:
+            if c not in df.columns:
+                df[c] = ""
+        df = df[cols]
         df = geocode_df(df)
     print(f"  → 총 {len(df)}개 매장, 컬럼: {list(df.columns)}")
 

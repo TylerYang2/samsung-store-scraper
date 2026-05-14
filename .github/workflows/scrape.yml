@@ -1,8 +1,6 @@
 name: Samsung Store Scraper
 
 on:
-  schedule:
-    - cron: '0 21 1 * *'  # 매월 1일 오전 6시 KST (UTC 21:00 전날)
   workflow_dispatch:        # 수동 실행
 
 concurrency:
@@ -33,4 +31,5 @@ jobs:
           BOX_REFRESH_TOKEN: ${{ secrets.BOX_REFRESH_TOKEN }}
           BOX_ACCESS_TOKEN:  ${{ secrets.BOX_ACCESS_TOKEN }}
           GH_PAT:            ${{ secrets.GH_PAT }}
+          KAKAO_API_KEY:     ${{ secrets.KAKAO_API_KEY }}
         run: python samsung_stores.py
