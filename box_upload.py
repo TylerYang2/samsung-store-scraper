@@ -1,14 +1,18 @@
+import base64
 import json
 import os
 import sys
 
 import requests
+from nacl import encoding, public
 
-BOX_FOLDER_ID = "387707675849"
+BOX_FOLDER_ID     = "387707675849"
 BOX_CLIENT_ID     = os.environ.get("BOX_CLIENT_ID", "")
 BOX_CLIENT_SECRET = os.environ.get("BOX_CLIENT_SECRET", "")
 BOX_REFRESH_TOKEN = os.environ.get("BOX_REFRESH_TOKEN", "")
 BOX_ACCESS_TOKEN  = os.environ.get("BOX_ACCESS_TOKEN", "")
+GH_PAT            = os.environ.get("GH_PAT", "")
+GH_REPO           = os.environ.get("GITHUB_REPOSITORY", "")
 
 
 def box_refresh(refresh_token: str) -> tuple[str, str]:
@@ -23,6 +27,29 @@ def box_refresh(refresh_token: str) -> tuple[str, str]:
         sys.exit(1)
     data = resp.json()
     return data["access_token"], data["refresh_token"]
+
+
+def update_github_secret(name: str, value: str):
+    if not GH_PAT or not GH_REPO:
+        return
+    headers = {"Authorization": f"token {GH_PAT}",
+                "Accept": "application/vnd.github.v3+json"}
+    r = requests.get(
+        f"https://api.github.com/repos/{GH_REPO}/actions/secrets/public-key",
+        headers=headers, timeout=10)
+    r.raise_for_status()
+    key_data = r.json()
+    pub_key  = public.PublicKey(key_data["key"].encode(), encoding.Base64Encoder())
+    encrypted = base64.b64encode(public.SealedBox(pub_key).encrypt(value.encode())).decode()
+    resp = requests.put(
+        f"https://api.github.com/repos/{GH_REPO}/actions/secrets/{name}",
+        headers=headers,
+        json={"encrypted_value": encrypted, "key_id": key_data["key_id"]},
+        timeout=10)
+    if resp.status_code in (201, 204):
+        print(f"  → GitHub Secret '{name}' 자동 갱신 완료")
+    else:
+        print(f"  → GitHub Secret '{name}' 갱신 실패 (status {resp.status_code})")
 
 
 def box_find_file(token: str, folder_id: str, filename: str) -> str | None:
@@ -60,9 +87,11 @@ def main():
 
     token         = BOX_ACCESS_TOKEN
     refresh_token = BOX_REFRESH_TOKEN
+    refreshed     = False
 
     if not token:
         token, refresh_token = box_refresh(refresh_token)
+        refreshed = True
 
     output_dir = "output"
     files = [f for f in os.listdir(output_dir) if f.endswith(".xlsx")]
@@ -79,9 +108,15 @@ def main():
             if e.response is not None and e.response.status_code == 401:
                 print("  → access_token 만료, refresh 중...")
                 token, refresh_token = box_refresh(refresh_token)
+                refreshed = True
                 box_upload_file(token, BOX_FOLDER_ID, filename, filepath)
             else:
                 raise
+
+    # 새 토큰을 GitHub Secret에 자동 저장
+    if refreshed:
+        update_github_secret("BOX_ACCESS_TOKEN", token)
+        update_github_secret("BOX_REFRESH_TOKEN", refresh_token)
 
     print(f"\n총 {len(files)}개 파일 Box 업로드 완료")
 
