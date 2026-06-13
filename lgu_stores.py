@@ -40,9 +40,10 @@ def get_districts(session: requests.Session, sido: str) -> list[str]:
         data = resp.json()
         if isinstance(data, list) and data and 'codeVal' in data[0]:
             return [d['codeVal'] for d in data]
+        print(f"    [구군 응답 이상] {sido}: {str(data)[:100]}")
     except Exception as e:
         print(f"    [구군 조회 실패] {sido}: {e}")
-    return ['']  # 실패 시 구군 없이 시도
+    return ['']
 
 
 def get_stores(session: requests.Session, sido: str, sigungu: str = '') -> list[dict]:
@@ -62,7 +63,14 @@ def get_stores(session: requests.Session, sido: str, sigungu: str = '') -> list[
         resp = session.get(STORE_URL, params=params, timeout=30)
         resp.raise_for_status()
         data = resp.json()
-        return data if isinstance(data, list) else []
+        # 배열 또는 {"data": [...]} 형태 모두 처리
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            for key in ('data', 'list', 'result', 'shopList'):
+                if isinstance(data.get(key), list):
+                    return data[key]
+        return []
     except Exception as e:
         print(f"    [매장 조회 실패] {sido} {sigungu}: {e}")
         return []
