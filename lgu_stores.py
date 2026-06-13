@@ -107,14 +107,6 @@ def scrape_all() -> pd.DataFrame:
         time.sleep(0.5)
 
     print(f"  → 총 {len(collected)}개 LGU+ 매장 수집")
-
-    # 실제 주소 기준 시도 분포 확인
-    by_sido = {}
-    for s in collected.values():
-        by_sido[s['sido']] = by_sido.get(s['sido'], 0) + 1
-    for k, v in sorted(by_sido.items()):
-        print(f"     {k}: {v}개")
-
     return pd.DataFrame(list(collected.values()))
 
 
