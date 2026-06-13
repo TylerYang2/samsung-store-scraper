@@ -49,34 +49,30 @@ jobs:
 
       - name: Run KT scraper
         if: inputs.target == 'carriers' || inputs.target == 'all' || inputs.target == 'kt'
-        env:
-          BOX_CLIENT_ID:     ${{ secrets.BOX_CLIENT_ID }}
-          BOX_CLIENT_SECRET: ${{ secrets.BOX_CLIENT_SECRET }}
-          BOX_REFRESH_TOKEN: ${{ secrets.BOX_REFRESH_TOKEN }}
-          BOX_ACCESS_TOKEN:  ${{ secrets.BOX_ACCESS_TOKEN }}
         run: python kt_stores.py
 
       - name: Run LGU+ scraper
         if: inputs.target == 'carriers' || inputs.target == 'all' || inputs.target == 'lgu'
-        env:
-          BOX_CLIENT_ID:     ${{ secrets.BOX_CLIENT_ID }}
-          BOX_CLIENT_SECRET: ${{ secrets.BOX_CLIENT_SECRET }}
-          BOX_REFRESH_TOKEN: ${{ secrets.BOX_REFRESH_TOKEN }}
-          BOX_ACCESS_TOKEN:  ${{ secrets.BOX_ACCESS_TOKEN }}
         run: python lgu_stores.py
 
       - name: Run SKT scraper
         if: inputs.target == 'carriers' || inputs.target == 'all' || inputs.target == 'skt'
         env:
-          BOX_CLIENT_ID:       ${{ secrets.BOX_CLIENT_ID }}
-          BOX_CLIENT_SECRET:   ${{ secrets.BOX_CLIENT_SECRET }}
-          BOX_REFRESH_TOKEN:   ${{ secrets.BOX_REFRESH_TOKEN }}
-          BOX_ACCESS_TOKEN:    ${{ secrets.BOX_ACCESS_TOKEN }}
           PYTHONUNBUFFERED: '1'
         run: python skt_stores.py
 
-      - name: Upload results
+      - name: Upload to Box
+        if: inputs.target == 'carriers' || inputs.target == 'all' || inputs.target == 'kt' || inputs.target == 'lgu' || inputs.target == 'skt'
+        env:
+          BOX_CLIENT_ID:     ${{ secrets.BOX_CLIENT_ID }}
+          BOX_CLIENT_SECRET: ${{ secrets.BOX_CLIENT_SECRET }}
+          BOX_REFRESH_TOKEN: ${{ secrets.BOX_REFRESH_TOKEN }}
+          BOX_ACCESS_TOKEN:  ${{ secrets.BOX_ACCESS_TOKEN }}
+        run: python box_upload.py
+
+      - name: Upload results artifact
         uses: actions/upload-artifact@v4
+        if: always()
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         with:
