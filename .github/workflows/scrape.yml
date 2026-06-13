@@ -1,16 +1,26 @@
-name: Samsung Store Scraper
+name: Store Scraper
 
 on:
-  workflow_dispatch:        # 수동 실행
+  workflow_dispatch:
+    inputs:
+      target:
+        description: '실행할 스크래퍼'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - samsung
+          - kt
 
 concurrency:
-  group: samsung-scraper
+  group: store-scraper
   cancel-in-progress: false
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -24,14 +34,19 @@ jobs:
           pip install -r requirements.txt
           playwright install --with-deps chromium
 
-      - name: Run scraper
+      - name: Run Samsung scraper
+        if: inputs.target == 'both' || inputs.target == 'samsung'
         env:
           KAKAO_API_KEY: ${{ secrets.KAKAO_API_KEY }}
         run: python samsung_stores.py
 
-      - name: Upload result
+      - name: Run KT scraper
+        if: inputs.target == 'both' || inputs.target == 'kt'
+        run: python kt_stores.py
+
+      - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: Samsung_Stores
-          path: output/Samsung_Stores.xlsx
+          name: Store_Data
+          path: output/
           retention-days: 30
