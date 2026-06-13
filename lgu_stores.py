@@ -59,13 +59,16 @@ def get_stores(session: requests.Session, sido: str, sigungu: str = '') -> list[
         resp = session.get(STORE_URL, params=params, timeout=30)
         resp.raise_for_status()
         data = resp.json()
-        # 배열 또는 {"data": [...]} 형태 모두 처리
         if isinstance(data, list):
+            if sido in ('충청남도', '경상남도') and len(data) == 0:
+                print(f"    [DEBUG 0개] sido={sido} sigungu={sigungu} | status={resp.status_code} | raw={resp.text[:150]}")
             return data
         if isinstance(data, dict):
             for key in ('data', 'list', 'result', 'shopList'):
                 if isinstance(data.get(key), list):
                     return data[key]
+            if sido in ('충청남도', '경상남도'):
+                print(f"    [DEBUG dict] sido={sido} sigungu={sigungu} | keys={list(data.keys())} | raw={resp.text[:150]}")
         return []
     except Exception as e:
         print(f"    [매장 조회 실패] {sido} {sigungu}: {e}")
