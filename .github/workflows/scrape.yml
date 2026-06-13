@@ -6,12 +6,13 @@ on:
       target:
         description: '실행할 스크래퍼'
         required: true
-        default: 'both'
+        default: 'all'
         type: choice
         options:
-          - both
+          - all
           - samsung
           - kt
+          - lgu
 
 concurrency:
   group: store-scraper
@@ -20,7 +21,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
@@ -35,14 +36,23 @@ jobs:
           playwright install --with-deps chromium
 
       - name: Run Samsung scraper
-        if: inputs.target == 'both' || inputs.target == 'samsung'
+        if: inputs.target == 'all' || inputs.target == 'samsung'
         env:
           KAKAO_API_KEY: ${{ secrets.KAKAO_API_KEY }}
         run: python samsung_stores.py
 
       - name: Run KT scraper
-        if: inputs.target == 'both' || inputs.target == 'kt'
+        if: inputs.target == 'all' || inputs.target == 'kt'
+        env:
+          BOX_CLIENT_ID:     ${{ secrets.BOX_CLIENT_ID }}
+          BOX_CLIENT_SECRET: ${{ secrets.BOX_CLIENT_SECRET }}
+          BOX_REFRESH_TOKEN: ${{ secrets.BOX_REFRESH_TOKEN }}
+          BOX_ACCESS_TOKEN:  ${{ secrets.BOX_ACCESS_TOKEN }}
         run: python kt_stores.py
+
+      - name: Run LGU+ scraper
+        if: inputs.target == 'all' || inputs.target == 'lgu'
+        run: python lgu_stores.py
 
       - name: Upload results
         uses: actions/upload-artifact@v4
