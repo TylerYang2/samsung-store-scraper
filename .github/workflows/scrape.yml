@@ -6,9 +6,10 @@ on:
       target:
         description: '실행할 스크래퍼'
         required: true
-        default: 'all'
+        default: 'carriers'
         type: choice
         options:
+          - carriers
           - all
           - samsung
           - kt
@@ -22,7 +23,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4
@@ -47,7 +48,7 @@ jobs:
         run: python samsung_stores.py
 
       - name: Run KT scraper
-        if: inputs.target == 'all' || inputs.target == 'kt'
+        if: inputs.target == 'carriers' || inputs.target == 'all' || inputs.target == 'kt'
         env:
           BOX_CLIENT_ID:     ${{ secrets.BOX_CLIENT_ID }}
           BOX_CLIENT_SECRET: ${{ secrets.BOX_CLIENT_SECRET }}
@@ -56,11 +57,21 @@ jobs:
         run: python kt_stores.py
 
       - name: Run LGU+ scraper
-        if: inputs.target == 'all' || inputs.target == 'lgu'
+        if: inputs.target == 'carriers' || inputs.target == 'all' || inputs.target == 'lgu'
+        env:
+          BOX_CLIENT_ID:     ${{ secrets.BOX_CLIENT_ID }}
+          BOX_CLIENT_SECRET: ${{ secrets.BOX_CLIENT_SECRET }}
+          BOX_REFRESH_TOKEN: ${{ secrets.BOX_REFRESH_TOKEN }}
+          BOX_ACCESS_TOKEN:  ${{ secrets.BOX_ACCESS_TOKEN }}
         run: python lgu_stores.py
 
       - name: Run SKT scraper
-        if: inputs.target == 'all' || inputs.target == 'skt'
+        if: inputs.target == 'carriers' || inputs.target == 'all' || inputs.target == 'skt'
+        env:
+          BOX_CLIENT_ID:     ${{ secrets.BOX_CLIENT_ID }}
+          BOX_CLIENT_SECRET: ${{ secrets.BOX_CLIENT_SECRET }}
+          BOX_REFRESH_TOKEN: ${{ secrets.BOX_REFRESH_TOKEN }}
+          BOX_ACCESS_TOKEN:  ${{ secrets.BOX_ACCESS_TOKEN }}
         run: python skt_stores.py
 
       - name: Upload results
