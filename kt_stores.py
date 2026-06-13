@@ -33,8 +33,14 @@ def get_session() -> requests.Session:
         'Referer': f'{BASE_URL}/store/KtStoreSearch.do',
         'X-Requested-With': 'XMLHttpRequest',
     })
-    s.get(f'{BASE_URL}/store/KtStoreSearch.do', timeout=15)
-    return s
+    for attempt in range(5):
+        try:
+            s.get(f'{BASE_URL}/store/KtStoreSearch.do', timeout=30)
+            return s
+        except Exception as e:
+            print(f"  [세션 재시도 {attempt+1}/5] {e}")
+            time.sleep(10)
+    return s  # 세션 쿠키 없이 진행
 
 
 def _post(session: requests.Session, search_string: str, page_no: int) -> str:
