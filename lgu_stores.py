@@ -60,15 +60,11 @@ def get_stores(session: requests.Session, sido: str, sigungu: str = '') -> list[
         resp.raise_for_status()
         data = resp.json()
         if isinstance(data, list):
-            if sido in ('충청남도', '경상남도') and len(data) == 0:
-                print(f"    [DEBUG 0개] sido={sido} sigungu={sigungu} | status={resp.status_code} | raw={resp.text[:150]}")
             return data
         if isinstance(data, dict):
             for key in ('data', 'list', 'result', 'shopList'):
                 if isinstance(data.get(key), list):
                     return data[key]
-            if sido in ('충청남도', '경상남도'):
-                print(f"    [DEBUG dict] sido={sido} sigungu={sigungu} | keys={list(data.keys())} | raw={resp.text[:150]}")
         return []
     except Exception as e:
         print(f"    [매장 조회 실패] {sido} {sigungu}: {e}")
@@ -77,40 +73,41 @@ def get_stores(session: requests.Session, sido: str, sigungu: str = '') -> list[
 
 def scrape_all() -> pd.DataFrame:
     session    = get_session()
-    all_stores, seen = [], set()
+    collected  = {}  # posCd → store dict (dedup 키)
 
     for sido in SIDO_LIST:
         districts  = DISTRICT_FALLBACK.get(sido, [''])
-        sido_count = 0
+        new_count  = 0
 
         for sigungu in districts:
             items = get_stores(session, sido, sigungu)
             for item in items:
-                key = item.get('posCd') or (item.get('posNm', ''), item.get('roadAddr', ''))
-                if key in seen:
+                pos_cd = item.get('posCd')
+                if not pos_cd or pos_cd in collected:
                     continue
-                seen.add(key)
                 address = item.get('roadAddr') or item.get('jibunAddr') or ''
                 parts   = address.split()
-                gugun   = sigungu or (parts[2] if len(parts) > 2 else '')
+                # sido/gugun은 실제 주소에서 추출 (쿼리 파라미터보다 정확)
+                actual_sido  = parts[0] if parts else sido
+                actual_gugun = parts[1] if len(parts) > 1 else ''
                 x = item.get('posXcrdVlue', '')
                 y = item.get('posYcrdVlue', '')
-                all_stores.append({
-                    'sido':    sido,
-                    'gugun':   gugun,
+                collected[pos_cd] = {
+                    'sido':    actual_sido,
+                    'gugun':   actual_gugun,
                     'name':    item.get('posNm', ''),
                     'address': address,
                     'lat':     float(y) if y else None,
                     'lng':     float(x) if x else None,
-                })
-                sido_count += 1
+                }
+                new_count += 1
             time.sleep(0.3)
 
-        print(f"  ✓ {sido}: {sido_count}개")
+        print(f"  ✓ {sido}: {new_count}개")
         time.sleep(0.5)
 
-    print(f"  → 총 {len(all_stores)}개 LGU+ 매장 수집")
-    return pd.DataFrame(all_stores)
+    print(f"  → 총 {len(collected)}개 LGU+ 매장 수집")
+    return pd.DataFrame(list(collected.values()))
 
 
 def main():
