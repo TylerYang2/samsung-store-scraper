@@ -23,7 +23,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v4
@@ -68,10 +68,11 @@ jobs:
       - name: Run SKT scraper
         if: inputs.target == 'carriers' || inputs.target == 'all' || inputs.target == 'skt'
         env:
-          BOX_CLIENT_ID:     ${{ secrets.BOX_CLIENT_ID }}
-          BOX_CLIENT_SECRET: ${{ secrets.BOX_CLIENT_SECRET }}
-          BOX_REFRESH_TOKEN: ${{ secrets.BOX_REFRESH_TOKEN }}
-          BOX_ACCESS_TOKEN:  ${{ secrets.BOX_ACCESS_TOKEN }}
+          BOX_CLIENT_ID:       ${{ secrets.BOX_CLIENT_ID }}
+          BOX_CLIENT_SECRET:   ${{ secrets.BOX_CLIENT_SECRET }}
+          BOX_REFRESH_TOKEN:   ${{ secrets.BOX_REFRESH_TOKEN }}
+          BOX_ACCESS_TOKEN:    ${{ secrets.BOX_ACCESS_TOKEN }}
+          PYTHONUNBUFFERED: '1'
         run: python skt_stores.py
 
       - name: Upload results
