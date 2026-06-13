@@ -7,7 +7,6 @@ import pandas as pd
 
 BASE_URL  = "https://www.lguplus.com"
 STORE_URL = f"{BASE_URL}/uhdc/fo/cusp/svug/shopinfo/v1/ccw-shop-nm"
-ADDR_URL  = f"{BASE_URL}/uhdc/fo/cusp/svug/shopinfo/v1/addr"
 FILE_NAME = "LGU_Stores.xlsx"
 
 SIDO_LIST = [
@@ -16,6 +15,15 @@ SIDO_LIST = [
     '강원특별자치도', '충청북도', '충청남도', '경상북도', '경상남도',
     '전북특별자치도', '전라남도', '제주특별자치도',
 ]
+
+# 빈 sigungu로 조회 시 0개 반환되는 지역 — 구/군별 직접 조회
+DISTRICT_FALLBACK = {
+    '충청남도': ['천안시', '공주시', '보령시', '아산시', '서산시', '논산시', '계룡시', '당진시',
+               '금산군', '부여군', '서천군', '청양군', '홍성군', '예산군', '태안군'],
+    '경상남도': ['창원시', '진주시', '통영시', '사천시', '김해시', '밀양시', '거제시', '양산시',
+               '의령군', '함안군', '창녕군', '고성군', '남해군', '하동군', '산청군', '함양군',
+               '거창군', '합천군'],
+}
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
@@ -32,18 +40,6 @@ def get_session() -> requests.Session:
     s.headers.update(HEADERS)
     s.get(f'{BASE_URL}/support/store-address', timeout=15)
     return s
-
-
-def get_districts(session: requests.Session, sido: str) -> list[str]:
-    try:
-        resp = session.get(ADDR_URL, params={'sido': sido}, timeout=15)
-        data = resp.json()
-        if isinstance(data, list) and data and 'codeVal' in data[0]:
-            return [d['codeVal'] for d in data]
-        print(f"    [구군 응답 이상] {sido}: {str(data)[:100]}")
-    except Exception as e:
-        print(f"    [구군 조회 실패] {sido}: {e}")
-    return ['']
 
 
 def get_stores(session: requests.Session, sido: str, sigungu: str = '') -> list[dict]:
@@ -81,21 +77,19 @@ def scrape_all() -> pd.DataFrame:
     all_stores, seen = [], set()
 
     for sido in SIDO_LIST:
-        districts = get_districts(session, sido)
+        districts  = DISTRICT_FALLBACK.get(sido, [''])
         sido_count = 0
 
         for sigungu in districts:
             items = get_stores(session, sido, sigungu)
             for item in items:
-                key = item.get('posCd', '') or (item.get('posNm', ''), item.get('roadAddr', ''))
+                key = item.get('posCd') or (item.get('posNm', ''), item.get('roadAddr', ''))
                 if key in seen:
                     continue
                 seen.add(key)
-
                 address = item.get('roadAddr') or item.get('jibunAddr') or ''
                 parts   = address.split()
                 gugun   = sigungu or (parts[2] if len(parts) > 2 else '')
-
                 x = item.get('posXcrdVlue', '')
                 y = item.get('posYcrdVlue', '')
                 all_stores.append({
