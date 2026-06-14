@@ -1,6 +1,8 @@
 name: Store Scraper
 
 on:
+  schedule:
+    - cron: '0 21 1 * *'  # 매월 1일 오전 6시 KST (UTC 21:00 전날)
   workflow_dispatch:
     inputs:
       target:
@@ -22,60 +24,44 @@ concurrency:
 
 jobs:
   scrape:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v4
-        env:
-          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
-      - uses: actions/setup-python@v5
-        env:
-          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-        with:
-          python-version: '3.12'
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
-          playwright install --with-deps chromium
+          pip3 install requests pandas openpyxl beautifulsoup4 playwright pynacl
+          python3 -m playwright install chromium
 
       - name: Run Samsung scraper
-        if: inputs.target == 'all' || inputs.target == 'samsung'
+        if: ${{ github.event_name == 'schedule' || inputs.target == 'all' || inputs.target == 'samsung' }}
         env:
           KAKAO_API_KEY: ${{ secrets.KAKAO_API_KEY }}
-        run: python samsung_stores.py
+        run: python3 samsung_stores.py
 
       - name: Run KT scraper
-        if: inputs.target == 'carriers' || inputs.target == 'all' || inputs.target == 'kt'
-        run: python kt_stores.py
+        if: ${{ github.event_name == 'schedule' || inputs.target == 'carriers' || inputs.target == 'all' || inputs.target == 'kt' }}
+        run: python3 kt_stores.py
 
       - name: Run LGU+ scraper
-        if: inputs.target == 'carriers' || inputs.target == 'all' || inputs.target == 'lgu'
-        run: python lgu_stores.py
+        if: ${{ github.event_name == 'schedule' || inputs.target == 'carriers' || inputs.target == 'all' || inputs.target == 'lgu' }}
+        run: python3 lgu_stores.py
 
       - name: Run SKT scraper
-        if: inputs.target == 'carriers' || inputs.target == 'all' || inputs.target == 'skt'
+        if: ${{ github.event_name == 'schedule' || inputs.target == 'carriers' || inputs.target == 'all' || inputs.target == 'skt' }}
         env:
           PYTHONUNBUFFERED: '1'
-        run: python skt_stores.py
+        run: python3 skt_stores.py
 
       - name: Upload to Box
-        if: inputs.target == 'carriers' || inputs.target == 'all' || inputs.target == 'kt' || inputs.target == 'lgu' || inputs.target == 'skt'
-        env:
-          BOX_CLIENT_ID:     ${{ secrets.BOX_CLIENT_ID }}
-          BOX_CLIENT_SECRET: ${{ secrets.BOX_CLIENT_SECRET }}
-          BOX_REFRESH_TOKEN: ${{ secrets.BOX_REFRESH_TOKEN }}
-          BOX_ACCESS_TOKEN:  ${{ secrets.BOX_ACCESS_TOKEN }}
-          GH_PAT:            ${{ secrets.GH_PAT }}
-        run: python box_upload.py
+        if: ${{ github.event_name == 'schedule' || inputs.target != 'samsung' }}
+        run: python3 box_upload.py
 
       - name: Upload results artifact
         uses: actions/upload-artifact@v4
         if: always()
-        env:
-          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         with:
           name: Store_Data
           path: output/
