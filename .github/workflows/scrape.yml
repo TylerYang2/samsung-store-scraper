@@ -57,7 +57,9 @@ jobs:
 
       - name: Upload to Box
         if: ${{ github.event_name == 'schedule' || inputs.target != 'samsung' }}
-        run: python3 box_upload.py      - name: Upload results artifact
+        run: python3 box_upload.py
+
+      - name: Upload results artifact
         uses: actions/upload-artifact@v4
         if: always()
         with:
