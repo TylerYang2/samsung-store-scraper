@@ -1,11 +1,28 @@
 import os
 import shutil
-import tempfile
+import time
 from datetime import datetime
 
 BOX_SYNC_DIR = os.path.expanduser(
     "~/Library/CloudStorage/Box-Box/KR_CSD_BPR/Carrier_POS_List/Carrier File"
 )
+
+
+def copy_to_box(src: str, dst: str, max_retries: int = 5):
+    """Box Drive 충돌 대비 retry + /tmp 경유 복사"""
+    for attempt in range(max_retries):
+        try:
+            tmp = f"/tmp/{os.path.basename(dst)}"
+            shutil.copy2(src, tmp)
+            shutil.copy2(tmp, dst)
+            os.unlink(tmp)
+            return
+        except OSError as e:
+            if attempt < max_retries - 1:
+                print(f"    [재시도 {attempt+1}/{max_retries}] {e}")
+                time.sleep(5)
+            else:
+                raise
 
 
 def main():
@@ -26,16 +43,9 @@ def main():
     for filename in sorted(files):
         src = os.path.join(output_dir, filename)
         dst = os.path.join(BOX_SYNC_DIR, filename)
-        # 임시 파일로 먼저 쓴 뒤 이동 (Box Drive 충돌 방지)
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=BOX_SYNC_DIR, suffix='.tmp')
-        try:
-            os.close(tmp_fd)
-            shutil.copy2(src, tmp_path)
-            os.replace(tmp_path, dst)
-            print(f"  → Box 동기화 완료: {filename}")
-        except Exception as e:
-            os.unlink(tmp_path)
-            raise e
+        print(f"  업로드 중: {filename}")
+        copy_to_box(src, dst)
+        print(f"  → Box 동기화 완료: {filename}")
 
     print(f"\n총 {len(files)}개 파일 Box 업로드 완료 ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})")
 
