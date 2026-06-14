@@ -35,8 +35,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip3 install --quiet requests pandas openpyxl beautifulsoup4 playwright pynacl
-          python3 -m playwright install chromium --quiet
+          pip3 install requests pandas openpyxl beautifulsoup4 playwright pynacl
+          python3 -m playwright install chromium
 
       - name: Run Samsung scraper
         if: ${{ inputs.target == 'all' || inputs.target == 'samsung' }}
