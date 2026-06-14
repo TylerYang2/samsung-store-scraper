@@ -91,13 +91,19 @@ def scrape_all() -> pd.DataFrame:
                 actual_gugun = parts[1] if len(parts) > 1 else ''
                 x = item.get('posXcrdVlue', '')
                 y = item.get('posYcrdVlue', '')
+                try:
+                    lat = float(y) if y else None
+                    lng = float(x) if x else None
+                except (ValueError, TypeError):
+                    lat, lng = None, None
                 collected[pos_cd] = {
+                    'posCd':   pos_cd,
                     'sido':    actual_sido,
                     'gugun':   actual_gugun,
                     'name':    item.get('posNm', ''),
                     'address': address,
-                    'lat':     float(y) if y else None,
-                    'lng':     float(x) if x else None,
+                    'lat':     lat,
+                    'lng':     lng,
                 }
                 new_count += 1
             time.sleep(0.3)
@@ -111,6 +117,9 @@ def scrape_all() -> pd.DataFrame:
 
 def main():
     df = scrape_all()
+
+    if len(df) == 0:
+        raise Exception("LGU+ 매장 수집 결과가 0개 — API 차단 또는 구조 변경 확인 필요")
 
     today     = datetime.now().strftime("%m-%d-%Y")
     file_name = f"LGU+_Stores_{today}.xlsx"

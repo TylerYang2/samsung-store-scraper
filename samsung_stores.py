@@ -48,6 +48,8 @@ def scrape_stores() -> list[dict]:
                 sido_codes = [item["CODE"] for item in data]
                 break
         print(f"  [SIDO] {len(sido_codes)}개 시도 코드 확보")
+        if not sido_codes:
+            raise Exception("시도 코드 추출 실패 — Samsung 페이지 로드 또는 API 구조 변경 확인 필요")
 
         seen = set()
         first_response = True

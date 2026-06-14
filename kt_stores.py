@@ -52,9 +52,15 @@ def _post(session: requests.Session, search_string: str, page_no: int) -> str:
         'wrTrns': 'N', 'chrgPmnt': 'N', 'overTimeShopSearchYn': '',
         'searchFlagUse': 'Y', 'pageNo': str(page_no),
     }
-    resp = session.post(SEARCH_URL, data=data, timeout=30)
-    resp.raise_for_status()
-    return resp.text
+    for attempt in range(5):
+        try:
+            resp = session.post(SEARCH_URL, data=data, timeout=30)
+            resp.raise_for_status()
+            return resp.text
+        except Exception as e:
+            print(f"    [POST 재시도 {attempt+1}/5] {e}")
+            time.sleep(10)
+    return ''
 
 
 def _parse(html: str, region: str) -> list[dict]:
@@ -72,11 +78,18 @@ def _parse(html: str, region: str) -> list[dict]:
             continue
         parts = address.split()
         gugun = parts[2] if len(parts) > 2 else ''
+        shop_code = hv('selectShopCode')
+        try:
+            lat = float(y) if y else None
+            lng = float(x) if x else None
+        except (ValueError, TypeError):
+            lat, lng = None, None
         stores.append({
+            'shopCode': shop_code,
             'sido': region, 'gugun': gugun,
             'name': name,  'address': address,
-            'lat':  float(y) if y else None,
-            'lng':  float(x) if x else None,
+            'lat':  lat,
+            'lng':  lng,
         })
     return stores
 
@@ -106,6 +119,9 @@ def scrape_all() -> pd.DataFrame:
 # ── 메인 ─────────────────────────────────────────────
 def main():
     df = scrape_all()
+
+    if len(df) == 0:
+        raise Exception("KT 매장 수집 결과가 0개 — API 차단 또는 구조 변경 확인 필요")
 
     today     = datetime.now().strftime("%m-%d-%Y")
     file_name = f"KT_Stores_{today}.xlsx"

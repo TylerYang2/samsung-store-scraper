@@ -64,17 +64,21 @@ def scrape_all() -> pd.DataFrame:
                 continue
             address = item.get('searchAddr', '')
             parts   = address.split()
+            try:
+                lat = float(item.get('geoY')) if item.get('geoY') else None
+                lng = float(item.get('geoX')) if item.get('geoX') else None
+            except (ValueError, TypeError):
+                lat, lng = None, None
             collected[loc_code] = {
+                'locCode': loc_code,
                 'sido':    parts[0] if parts else '',
                 'gugun':   parts[1] if len(parts) > 1 else '',
                 'name':    item.get('storeName', ''),
                 'address': address,
-                'lat':     float(item['geoY']) if item.get('geoY') else None,
-                'lng':     float(item['geoX']) if item.get('geoX') else None,
+                'lat':     lat,
+                'lng':     lng,
             }
         print(f"    p{page}: {len(items)}개 → 누계 {len(collected)}개")
-        if len(items) == 0:
-            break
         page += 1
         time.sleep(0.5)
 
@@ -84,6 +88,9 @@ def scrape_all() -> pd.DataFrame:
 
 def main():
     df = scrape_all()
+
+    if len(df) == 0:
+        raise Exception("SKT 매장 수집 결과가 0개 — API 차단 또는 구조 변경 확인 필요")
 
     today     = datetime.now().strftime("%m-%d-%Y")
     file_name = f"SKT_Stores_{today}.xlsx"

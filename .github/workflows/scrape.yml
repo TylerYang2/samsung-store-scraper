@@ -30,13 +30,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Clean output folder
+        run: rm -rf output && mkdir output
+
       - name: Install dependencies
         run: |
-          pip3 install requests pandas openpyxl beautifulsoup4 playwright pynacl
-          python3 -m playwright install chromium
+          pip3 install --quiet requests pandas openpyxl beautifulsoup4 playwright pynacl
+          python3 -m playwright install chromium --quiet
 
       - name: Run Samsung scraper
-        if: ${{ github.event_name == 'schedule' || inputs.target == 'all' || inputs.target == 'samsung' }}
+        if: ${{ inputs.target == 'all' || inputs.target == 'samsung' }}
         env:
           KAKAO_API_KEY: ${{ secrets.KAKAO_API_KEY }}
         run: python3 samsung_stores.py
