@@ -77,7 +77,7 @@ def _parse(html: str, region: str) -> list[dict]:
         if not name:
             continue
         parts = address.split()
-        gugun = parts[2] if len(parts) > 2 else ''
+        gugun = parts[1] if len(parts) > 1 else ''
         shop_code = hv('selectShopCode')
         try:
             lat = float(y) if y else None
