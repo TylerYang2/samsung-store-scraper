@@ -17,6 +17,7 @@ on:
           - kt
           - lgu
           - skt
+          - ktmns
 
 concurrency:
   group: store-scraper
@@ -57,6 +58,10 @@ jobs:
         env:
           PYTHONUNBUFFERED: '1'
         run: python3 skt_stores.py
+
+      - name: Run KT M&S scraper
+        if: ${{ github.event_name == 'schedule' || inputs.target == 'carriers' || inputs.target == 'all' || inputs.target == 'ktmns' }}
+        run: python3 ktmns_stores.py
 
       - name: Upload to Box
         if: ${{ github.event_name == 'schedule' || inputs.target != 'samsung' }}
