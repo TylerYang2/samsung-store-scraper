@@ -79,17 +79,30 @@ def _parse(html: str, region: str) -> list[dict]:
         parts = address.split()
         gugun = parts[1] if len(parts) > 1 else ''
         shop_code = hv('selectShopCode')
+        tel = hv('selectShopTel')
+        old_address = hv('selectShopOldAddress')
         try:
             lat = float(y) if y else None
             lng = float(x) if x else None
         except (ValueError, TypeError):
             lat, lng = None, None
+        week_el = branch.find('span', class_='week')
+        more_el = branch.find('span', class_='more')
+        hours = ' '.join(filter(None, [
+            week_el.get_text(strip=True) if week_el else '',
+            more_el.get_text(separator=' ', strip=True) if more_el else '',
+        ])).strip()
+        services = ','.join(el.get_text(strip=True) for el in branch.find_all('span', class_='icon'))
         stores.append({
             'shopCode': shop_code,
             'sido': region, 'gugun': gugun,
             'name': name,  'address': address,
             'lat':  lat,
             'lng':  lng,
+            'tel':        tel,
+            'oldAddress': old_address,
+            'hours':      hours,
+            'services':   services,
         })
     return stores
 

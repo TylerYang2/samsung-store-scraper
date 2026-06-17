@@ -104,6 +104,12 @@ def scrape_all() -> pd.DataFrame:
                     'address': address,
                     'lat':     lat,
                     'lng':     lng,
+                    'zip':       item.get('zip', ''),
+                    'telno':     item.get('telno', ''),
+                    'jibunAddr': item.get('jibunAddr', ''),
+                    'dlrCd':     item.get('dlrCd', ''),
+                    'dealNm':    item.get('dealNm', ''),
+                    'apleAsYn':  item.get('apleAsYn', ''),
                 }
                 new_count += 1
             time.sleep(0.3)

@@ -43,6 +43,7 @@ def scrape_all() -> pd.DataFrame:
             'address': item.get('address', ''),
             'lat':     lat,
             'lng':     lng,
+            'tel':     item.get('tel', ''),
         })
 
     print(f"  → 총 {len(stores)}개 KT M&S 매장 수집")

@@ -77,6 +77,10 @@ def scrape_all() -> pd.DataFrame:
                 'address': address,
                 'lat':     lat,
                 'lng':     lng,
+                'tel':       item.get('tel', ''),
+                'jibunAddr': item.get('jibunAddr', ''),
+                'appleYn':   item.get('appleYn', ''),
+                'shopOptm':  item.get('shopOptm', ''),
             }
         print(f"    p{page}: {len(items)}개 → 누계 {len(collected)}개")
         page += 1
